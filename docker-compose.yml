@@ -1,0 +1,25 @@
+# Local PostgreSQL for SCC Platform.
+# Start: docker compose up -d
+# Then set backend/.env DATABASE_URL as below.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: scc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scc
+      POSTGRES_PASSWORD: scc
+      POSTGRES_DB: scc_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - scc_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scc -d scc_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  scc_pg_data:
