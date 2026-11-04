@@ -12,6 +12,6 @@ frontend/.env
 *.pyc
 .DS_Store
 
-docs/_tmp_ai_camera_frames/
-docs/*.mp4
+# Design/reference only — keep locally, not needed on Replit
+docs/
 
