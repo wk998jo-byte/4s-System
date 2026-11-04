@@ -286,10 +286,10 @@ function pct(n: number, total: number) {
 }
 
 function fmtDur(hours: number) {
-  if (hours < 24) return `${hours.toFixed(1)} h`;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
   const d = hours / 24;
-  if (d < 7) return `${d.toFixed(1)} days`;
-  return `${(d / 7).toFixed(1)} wk`;
+  if (d < 7) return `${d.toFixed(1)}d`;
+  return `${(d / 7).toFixed(1)}w`;
 }
 
 type SlaState =
