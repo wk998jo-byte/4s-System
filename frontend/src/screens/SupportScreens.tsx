@@ -47,6 +47,7 @@ import { notifyListsChanged } from "../api/lists";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
 import { href } from "../lib/routing";
+import { useProjectAccess } from "../lib/useProjectAccess";
 import { AiCameraRecordDrawer } from "./AiCameraRecordDrawer";
 import { DashcamRecordDrawer } from "./DashcamRecordDrawer";
 import { ItqanRecordDrawer } from "./ItqanRecordDrawer";
@@ -1448,6 +1449,16 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
   const { user } = useAuth();
   const projects = useList("project");
   const departments = useList("department");
+  const catalogProjects = useMemo(
+    () => projects.items.map((item) => item.label),
+    [projects.items],
+  );
+  const projectAccess = useProjectAccess(catalogProjects);
+  const scopeProjects = useMemo(() => {
+    if (projectAccess.hasAllProjectAccess) return projects.items;
+    const allowed = new Set(projectAccess.accessProjects);
+    return projects.items.filter((item) => allowed.has(item.label));
+  }, [projectAccess.hasAllProjectAccess, projectAccess.accessProjects, projects.items]);
   const defaultStatus = user?.role === "admin" ? "under_process" : "open";
   const [status, setStatus] = useState(defaultStatus);
   const [type, setType] = useState("");
@@ -1465,6 +1476,26 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
     defaultStatusApplied.current = true;
     setStatus(user.role === "admin" ? "under_process" : "open");
   }, [user, caseId]);
+
+  useEffect(() => {
+    if (!projectAccess.isProjectScoped) return;
+    if (projectAccess.singleProject) {
+      const locked = `project:${projectAccess.singleProject}`;
+      if (scope !== locked) setScope(locked);
+      return;
+    }
+    if (scope.startsWith("project:")) {
+      const label = scope.slice("project:".length);
+      if (!projectAccess.accessProjects.includes(label)) setScope("");
+    } else if (scope.startsWith("department:")) {
+      setScope("");
+    }
+  }, [
+    projectAccess.isProjectScoped,
+    projectAccess.singleProject,
+    projectAccess.accessProjects,
+    scope,
+  ]);
 
   const load = useCallback(async () => {
     try {
@@ -1680,19 +1711,26 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
             className="sel"
             value={scope}
             aria-label="Project or department"
+            disabled={Boolean(projectAccess.singleProject)}
             onChange={(event) => setScope(event.target.value)}
           >
-            <option value="">All projects &amp; departments</option>
-            {projects.items.map((item) => (
+            {projectAccess.hasAllProjectAccess ? (
+              <option value="">All projects &amp; departments</option>
+            ) : projectAccess.accessProjects.length > 1 ? (
+              <option value="">All assigned projects</option>
+            ) : null}
+            {scopeProjects.map((item) => (
               <option key={`p-${item.id}`} value={`project:${item.label}`}>
                 {item.label}
               </option>
             ))}
-            {departments.items.map((item) => (
-              <option key={`d-${item.id}`} value={`department:${item.label}`}>
-                Dept: {item.label}
-              </option>
-            ))}
+            {projectAccess.hasAllProjectAccess
+              ? departments.items.map((item) => (
+                  <option key={`d-${item.id}`} value={`department:${item.label}`}>
+                    Dept: {item.label}
+                  </option>
+                ))
+              : null}
           </select>
           <input
             className="inp"

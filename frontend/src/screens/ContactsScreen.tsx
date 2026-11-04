@@ -142,37 +142,46 @@ function ContactTable({
 function defaultContactProject(
   accessProjects: string[],
   singleProject: string | null,
+  hasAllProjectAccess: boolean,
 ): ContactProjectId {
   const catalog = CONTACT_PROJECTS as readonly string[];
   if (singleProject && catalog.includes(singleProject)) {
     return singleProject as ContactProjectId;
   }
+  if (hasAllProjectAccess) return CONTACT_PROJECTS[0]!;
   const firstAssigned = accessProjects.find((p) => catalog.includes(p));
   if (firstAssigned) return firstAssigned as ContactProjectId;
-  return "Jafurah";
+  return CONTACT_PROJECTS[0]!;
 }
 
 export function ContactsScreen() {
   const { user } = useAuth();
   const canWrite = Boolean(user?.capabilities.manage_contacts || user?.role === "admin");
-  const projectAccess = useProjectAccess([...CONTACT_PROJECTS]);
+  const projectAccess = useProjectAccess(CONTACT_PROJECTS);
   const initialProject = useMemo(
     () =>
       defaultContactProject(
         projectAccess.accessProjects,
         projectAccess.singleProject,
+        projectAccess.hasAllProjectAccess,
       ),
-    [projectAccess.accessProjects, projectAccess.singleProject],
+    [
+      projectAccess.accessProjects,
+      projectAccess.singleProject,
+      projectAccess.hasAllProjectAccess,
+    ],
   );
   const [project, setProject] = useState<ContactProjectId>(initialProject);
   const [packs, setPacks] = useState(() => structuredClone(CONTACTS_BY_PROJECT));
   const [editing, setEditing] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
+  // Only re-lock the tab when assigned-project scope changes (not for admins).
   useEffect(() => {
+    if (projectAccess.hasAllProjectAccess) return;
     setProject(initialProject);
     setEditing(false);
-  }, [initialProject]);
+  }, [initialProject, projectAccess.hasAllProjectAccess]);
 
   const pack = packs[project];
 

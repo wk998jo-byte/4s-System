@@ -43,9 +43,11 @@ const HW_TO_DASH: Record<string, (typeof DEVICE_TYPES)[number]> = {
   "AI Cameras": "AI Camera",
   "AI Camera": "AI Camera",
   AVL: "GPS",
+  avl: "GPS",
   GPS: "GPS",
   Dashcams: "Dashcam",
   Dashcam: "Dashcam",
+  dashcam: "Dashcam",
   "SOS Devices": "Smart Helmet",
   "Smart Helmet": "Smart Helmet",
   "Smart Helmets": "Smart Helmet",
@@ -387,12 +389,14 @@ function Spark({
   );
 }
 
-function deviceRowsFromHw(hw: HwPayload | null): Array<[string, number[]]> {
-  if (!hw?.project_counts) return [];
-  return Object.entries(hw.project_counts)
-    .map(([site, counts]) => {
+function deviceRowsFromCounts(
+  counts: Record<string, Record<string, number>> | null | undefined,
+): Array<[string, number[]]> {
+  if (!counts) return [];
+  return Object.entries(counts)
+    .map(([site, byType]) => {
       const vals = DEVICE_TYPES.map((dashType) =>
-        Object.entries(counts).reduce((sum, [hwType, n]) => {
+        Object.entries(byType).reduce((sum, [hwType, n]) => {
           if (HW_TO_DASH[hwType] === dashType) return sum + (Number(n) || 0);
           return sum;
         }, 0),
@@ -690,9 +694,14 @@ function Donut({
 function HBars({
   rows,
   colorFor,
+  compact = false,
+  maxValue,
 }: {
   rows: Array<{ label: string; value: number }>;
   colorFor?: (label: string, i: number) => string;
+  compact?: boolean;
+  /** Shared scale when splitting a list across columns. */
+  maxValue?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
@@ -700,16 +709,25 @@ function HBars({
     hostRef,
     rows.map((r) => `${r.label}:${r.value}`).join("|"),
   );
-  const max = Math.max(1, ...rows.map((r) => r.value));
+  const max = Math.max(1, maxValue ?? 0, ...rows.map((r) => r.value));
   return (
-    <div className="v1-bars v1-chart-host" ref={hostRef} onMouseLeave={() => setTip(null)}>
+    <div
+      className={`v1-bars v1-chart-host${compact ? " is-compact" : ""}`}
+      ref={hostRef}
+      onMouseLeave={() => setTip(null)}
+    >
       {rows.map((row, i) => {
         const barColor =
           colorFor?.(row.label, i) ??
           (row.label === "Total" ? "var(--ink-2)" : "var(--steel)");
+        const display = row.label.replace(/ \(dept\)$/, "");
+        const isDept = / \(dept\)$/.test(row.label);
         return (
           <div className="v1-bar" key={row.label}>
-            <span className="l">{row.label}</span>
+            <span className="l" title={row.label}>
+              {display}
+              {isDept ? <small className="muted"> dept</small> : null}
+            </span>
             <span className="tr">
               <i
                 style={{
@@ -722,7 +740,7 @@ function HBars({
                     ? (e) =>
                         setTip(
                           tipFromEvent(e, hostRef.current, {
-                            title: row.label,
+                            title: display,
                             rows: [{ color: barColor, text: fmtN(row.value) }],
                             place: "right",
                           }),
@@ -1441,18 +1459,32 @@ function LocCard({
   index,
   rows,
   totals,
+  roomy = false,
 }: {
   title: string;
   index: number;
   rows: Array<[string, number[]]>;
   totals: number[];
+  /** Overall AI Camera card only — fuller labels, slightly larger type. */
+  roomy?: boolean;
 }) {
   const entries = rows
     .map(([l, v]) => ({ label: l, value: v[index] }))
     .filter((x) => x.value > 0)
     .sort((a, b) => b.value - a.value);
+  // Two columns when the list is long so the 3/4 card row stays compact.
+  const split = entries.length > 7;
+  const mid = Math.ceil(entries.length / 2);
+  const left = split ? entries.slice(0, mid) : entries;
+  const right = split ? entries.slice(mid) : [];
+  const barColor = (k: string) =>
+    k === "Total" ? "var(--ink-2)" : index === 4 || index === 5 ? "var(--red)" : "var(--steel)";
+  const scaleMax = Math.max(totals[index] || 0, ...entries.map((e) => e.value), 1);
+
   return (
-    <article className="v1-card">
+    <article
+      className={`v1-card v1-loc-card${split ? " is-split" : ""}${roomy ? " is-roomy" : ""}`}
+    >
       <div className="hd">
         <h3>{title}</h3>
       </div>
@@ -1460,12 +1492,18 @@ function LocCard({
         {entries.length} {entries.length === 1 ? "location" : "locations"}
       </p>
       {entries.length ? (
-        <HBars
-          rows={[{ label: "Total", value: totals[index] }, ...entries]}
-          colorFor={(k) =>
-            k === "Total" ? "var(--ink-2)" : index === 4 || index === 5 ? "var(--red)" : "var(--steel)"
-          }
-        />
+        <>
+          <div className="v1-loc-total">
+            <span>Total</span>
+            <b>{fmtN(totals[index])}</b>
+          </div>
+          <div className={split ? "v1-bars-cols" : undefined}>
+            <HBars rows={left} colorFor={barColor} compact={!roomy} maxValue={scaleMax} />
+            {split ? (
+              <HBars rows={right} colorFor={barColor} compact={!roomy} maxValue={scaleMax} />
+            ) : null}
+          </div>
+        </>
       ) : (
         <div className="empty">No devices in this scope.</div>
       )}
@@ -1484,7 +1522,7 @@ export function DashboardScreen({
   const projectList = useList("project");
   const departmentList = useList("department");
 
-  const [view, setView] = useState<DashView>("projects");
+  const [view, setView] = useState<DashView>("overall");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -1566,8 +1604,75 @@ export function DashboardScreen({
     };
   }, [load]);
 
-  const rows = useMemo(() => deviceRowsFromHw(hw), [hw]);
+  const catalogDepartments = useMemo(
+    () =>
+      departmentList.items.length
+        ? departmentList.items.map((d) => d.label)
+        : overview?.departments ?? [],
+    [departmentList.items, overview?.departments],
+  );
+
+  const rows = useMemo(() => {
+    const zeros = () => DEVICE_TYPES.map(() => 0);
+    if (view === "departments") {
+      const all = deviceRowsFromCounts(hw?.department_counts);
+      const allowed = new Set(
+        department
+          ? [department]
+          : catalogDepartments.length
+            ? catalogDepartments
+            : all.map(([site]) => site),
+      );
+      // Keep admin-list order when possible; drop sites outside the list.
+      const filtered = all.filter(([site]) => allowed.has(site));
+      if (!department && catalogDepartments.length) {
+        const bySite = new Map(filtered);
+        return catalogDepartments
+          .map((label): [string, number[]] => [label, bySite.get(label) ?? zeros()])
+          .sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0));
+      }
+      return filtered;
+    }
+    const projectRows = deviceRowsFromCounts(hw?.project_counts);
+    if (view === "projects") {
+      const allowed = new Set(
+        project ? [project] : projectAccess.accessProjects,
+      );
+      return projectRows.filter(([site]) => allowed.has(site));
+    }
+    // Over All: every HW site plus every admin-list department.
+    const projectNames = new Set(projectRows.map(([site]) => site));
+    const deptRows = deviceRowsFromCounts(hw?.department_counts).map(
+      ([site, vals]): [string, number[]] => [
+        projectNames.has(site) ? `${site} (dept)` : site,
+        vals,
+      ],
+    );
+    const knownDept = new Set(deptRows.map(([site]) => site));
+    const missingDepts = catalogDepartments
+      .map((label) => (projectNames.has(label) ? `${label} (dept)` : label))
+      .filter((label) => !knownDept.has(label))
+      .map((label): [string, number[]] => [label, zeros()]);
+    return [...projectRows, ...deptRows, ...missingDepts].sort(
+      (a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0),
+    );
+  }, [
+    hw,
+    view,
+    project,
+    department,
+    projectAccess.accessProjects,
+    catalogDepartments,
+  ]);
   const totals = useMemo(() => deviceTotals(rows), [rows]);
+  const deptSiteLabels = useMemo(() => {
+    const labels = new Set<string>();
+    for (const name of catalogDepartments) {
+      labels.add(name);
+      labels.add(`${name} (dept)`);
+    }
+    return labels;
+  }, [catalogDepartments]);
 
   const viewScoped = useMemo(() => {
     return cases.filter((r) => {
@@ -1848,52 +1953,92 @@ export function DashboardScreen({
   }, [viewScoped, device]);
 
   const siteRows = useMemo(() => {
-    const keys =
+    type SiteKey = { k: string; isP: boolean };
+    const keys: SiteKey[] =
       view === "departments"
-        ? [...new Set(scopedCases.map((r) => r.department).filter(Boolean) as string[])]
-        : [
-            ...new Set(
-              [
-                ...scopedCases.map((r) => r.project).filter(Boolean),
-                ...scopedCases.map((r) => r.department).filter(Boolean),
-              ] as string[],
-            ),
-          ];
+        ? (department
+            ? [department]
+            : catalogDepartments.length
+              ? [...catalogDepartments]
+              : [
+                  ...new Set(
+                    scopedCases.map((r) => r.department).filter(Boolean) as string[],
+                  ),
+                ]
+          ).map((k) => ({ k, isP: false }))
+        : view === "projects"
+          ? [
+              ...new Set(
+                scopedCases
+                  .map((r) => r.project)
+                  .filter((p): p is string => Boolean(p) && (!project || p === project)),
+              ),
+            ].map((k) => ({ k, isP: true }))
+          : [
+              // Over All: every catalog project and every admin department.
+              ...(projectAccess.hasAllProjectAccess
+                ? catalogProjects
+                : projectAccess.accessProjects
+              ).map((k) => ({ k, isP: true })),
+              ...catalogDepartments.map((k) => ({ k, isP: false })),
+            ];
     const prevMap = prevCases
       .filter((r) => matchesDevice(r, device))
       .reduce<Record<string, number>>((acc, r) => {
-        const k = r.project || r.department || "—";
-        acc[k] = (acc[k] || 0) + 1;
+        const bucket = r.project
+          ? `p:${r.project}`
+          : r.department
+            ? `d:${r.department}`
+            : null;
+        if (!bucket) return acc;
+        acc[bucket] = (acc[bucket] || 0) + 1;
         return acc;
       }, {});
     const rowsOut = keys
-      .map((k) => {
-        const list = scopedCases.filter((r) => (r.project || r.department) === k);
+      .map(({ k, isP }) => {
+        const list = scopedCases.filter((r) =>
+          isP ? r.project === k : Boolean(r.department) && r.department === k && !r.project,
+        );
         const row = sumTypes.map((t) => list.filter(t.f).length);
         const tot = row.reduce((a, b) => a + b, 0);
         const st = ["open", "under_process", "closed"].map(
           (s) => list.filter((r) => r.status === s && r.record_type !== "itqan").length,
         );
-        const od = (overdue?.items || []).filter(
-          (item) =>
-            (String(item.project || item.department || "") === k) &&
-            (item.state === "over" || item.state === "esc"),
-        ).length;
+        const od = (overdue?.items || []).filter((item) => {
+          if (isP) return String(item.project || "") === k;
+          return String(item.department || "") === k && !item.project;
+        }).length;
+        const prevKey = isP ? `p:${k}` : `d:${k}`;
         return {
           k,
-          isP: Boolean(list[0]?.project && list[0].project === k),
+          isP,
           row,
           tot,
           st,
           od,
-          prev: range.cmp ? prevMap[k] ?? 0 : null,
+          prev: range.cmp ? prevMap[prevKey] ?? 0 : null,
         };
       })
-      .filter((x) => x.tot > 0)
-      .sort((a, b) => b.tot - a.tot);
+      // Over All keeps empty rows so every project/department stays visible.
+      .filter((x) => view === "overall" || x.tot > 0)
+      .sort((a, b) => b.tot - a.tot || Number(b.isP) - Number(a.isP) || a.k.localeCompare(b.k));
     const colT = sumTypes.map((_, i) => rowsOut.reduce((a, x) => a + x.row[i], 0));
     return { rowsOut, colT };
-  }, [scopedCases, prevCases, device, view, sumTypes, overdue, range.cmp]);
+  }, [
+    scopedCases,
+    prevCases,
+    device,
+    view,
+    project,
+    department,
+    catalogProjects,
+    catalogDepartments,
+    projectAccess.hasAllProjectAccess,
+    projectAccess.accessProjects,
+    sumTypes,
+    overdue,
+    range.cmp,
+  ]);
 
   const updatedAt = overview?.generated_at
     ? new Date(overview.generated_at).toLocaleTimeString("en-GB", {
@@ -1960,6 +2105,7 @@ export function DashboardScreen({
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={projectAccess.isProjectScoped}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
@@ -2100,28 +2246,55 @@ export function DashboardScreen({
             })}
           </div>
 
-          <div className="v1-grid g3">
+          <div className="v1-grid g3 v1-dash-pack">
             <article className="v1-card">
               <div className="hd">
-                <h3>Projects overview</h3>
+                <h3>
+                  {view === "departments"
+                    ? "Departments overview"
+                    : view === "overall"
+                      ? "Projects & departments overview"
+                      : "Projects overview"}
+                </h3>
               </div>
               <p className="sub">
-                All devices by location{device !== "All" ? ` · ${device}` : ""}
+                {view === "departments"
+                  ? `All devices by department${device !== "All" ? ` · ${device}` : ""}`
+                  : view === "overall"
+                    ? `All devices by project site and department${device !== "All" ? ` · ${device}` : ""}`
+                    : `All devices by location${device !== "All" ? ` · ${device}` : ""}`}
               </p>
-              <div className="v1-donut-row">
+              <div
+                className={
+                  view === "projects"
+                    ? "v1-donut-row is-by-project"
+                    : view === "overall"
+                      ? "v1-donut-row is-legend-below is-overall"
+                      : "v1-donut-row is-legend-below"
+                }
+              >
                 <Donut
                   labels={projDonut.labels}
                   values={projDonut.values}
                   colors={DONUT_PAL}
-                  size={200}
+                  size={150}
                 />
-                <div className="v1-legend col">
-                  {projDonut.labels.slice(0, 9).map((label, i) => (
-                    <span key={label}>
+                <div
+                  className={`v1-legend col${
+                    view !== "projects" && projDonut.labels.length > 5 ? " is-dense" : ""
+                  }`}
+                >
+                  {(view === "overall"
+                    ? projDonut.labels
+                    : projDonut.labels.slice(0, 12)
+                  ).map((label, i) => (
+                    <div className="v1-legend-item" key={label}>
                       <i style={{ background: DONUT_PAL[i % DONUT_PAL.length] }} />
-                      {label}
+                      <span className="v1-legend-label" title={label}>
+                        {label.replace(/ \(dept\)$/, "")}
+                      </span>
                       <b className="mono">{fmtN(projDonut.values[i])}</b>
-                    </span>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -2143,22 +2316,26 @@ export function DashboardScreen({
             <LocCard
               title={
                 show(0) && device === "All"
-                  ? "AI Camera per location"
-                  : `${DEVICE_TYPES[locIndex]} per location`
+                  ? `AI Camera per ${view === "departments" ? "department" : "location"}`
+                  : `${DEVICE_TYPES[locIndex]} per ${view === "departments" ? "department" : "location"}`
               }
               index={locIndex}
               rows={rows}
               totals={totals}
+              roomy={
+                view === "overall" &&
+                (device === "All" || device === "AI Camera")
+              }
             />
           </div>
 
-          <div className="v1-grid g4">
+          <div className="v1-grid g4 v1-dash-pack">
             {[1, 2, 4, 5]
-              .filter((i) => show(i) && !(device !== "All" && i === locIndex && !show(0)))
+              .filter((i) => show(i) && !(device !== "All" && i === locIndex))
               .map((i) => (
                 <LocCard
                   key={DEVICE_TYPES[i]}
-                  title={`${DEVICE_TYPES[i]}${i === 5 ? "s" : ""} per location`}
+                  title={`${DEVICE_TYPES[i]}${i === 5 ? "s" : ""} per ${view === "departments" ? "department" : "location"}`}
                   index={i}
                   rows={rows}
                   totals={totals}
@@ -2167,8 +2344,13 @@ export function DashboardScreen({
           </div>
 
           {device === "All" ? (
-            <div className="v1-grid g4">
-              <LocCard title="Smart Helmets per location" index={3} rows={rows} totals={totals} />
+            <div className="v1-grid g4 v1-dash-pack">
+              <LocCard
+                title={`Smart Helmets per ${view === "departments" ? "department" : "location"}`}
+                index={3}
+                rows={rows}
+                totals={totals}
+              />
               <article className="v1-card span3">
                 <div className="hd">
                   <h3>Needs attention</h3>
@@ -2327,13 +2509,23 @@ export function DashboardScreen({
               </button>
             </div>
             <p className="sub">
-              Devices deployed per project and location, shaded by share of each device type
+              {view === "departments"
+                ? "Devices deployed per department, shaded by share of each device type"
+                : view === "overall"
+                  ? "Devices deployed per project site and department, shaded by share of each device type"
+                  : "Devices deployed per project and location, shaded by share of each device type"}
             </p>
             <div className="tbl-wrap">
               <table className="tbl">
                 <thead>
                   <tr>
-                    <th>Projects / locations</th>
+                    <th>
+                      {view === "departments"
+                        ? "Departments"
+                        : view === "overall"
+                          ? "Projects / departments"
+                          : "Projects / locations"}
+                    </th>
                     {DEVICE_TYPES.map((t) => (
                       <th className="n" key={t}>
                         {t}
@@ -2351,7 +2543,10 @@ export function DashboardScreen({
                     .map(([site, vals]) => (
                       <tr key={site}>
                         <td>
-                          <b>{site}</b>
+                          <b>{site.replace(/ \(dept\)$/, "")}</b>
+                          {view === "overall" && deptSiteLabels.has(site) ? (
+                            <small className="muted"> dept</small>
+                          ) : null}
                         </td>
                         {vals.map((v, i) => (
                           <td
@@ -2580,11 +2775,20 @@ export function DashboardScreen({
 
           <article className="v1-card">
             <div className="hd">
-              <h3>Observations and violations by project site</h3>
+              <h3>
+                {view === "departments"
+                  ? "Observations and violations by department"
+                  : view === "overall"
+                    ? "Observations and violations by project and department"
+                    : "Observations and violations by project site"}
+              </h3>
             </div>
             <p className="sub">
-              Total number of observations and violations, project site wise. Shading shows
-              each site&apos;s share of the column.
+              {view === "departments"
+                ? "Total observations and violations by department. Shading shows each department's share of the column."
+                : view === "overall"
+                  ? "Total observations and violations across every project and department. Shading shows each row's share of the column."
+                  : "Total number of observations and violations, project site wise. Shading shows each site's share of the column."}
             </p>
             <div className="tbl-wrap">
               <table className="tbl">
@@ -2614,7 +2818,7 @@ export function DashboardScreen({
                 </thead>
                 <tbody>
                   {siteRows.rowsOut.map((x) => (
-                    <tr key={x.k}>
+                    <tr key={`${x.isP ? "p" : "d"}-${x.k}`}>
                       <td>
                         <b>{x.k}</b>
                         {!x.isP ? <small className="muted"> dept</small> : null}

@@ -1141,7 +1141,7 @@ export function ItqanScreen({
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ItqanView>("projects");
+  const [view, setView] = useState<ItqanView>("overall");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
@@ -1298,6 +1298,7 @@ export function ItqanScreen({
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={projectAccess.isProjectScoped}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],

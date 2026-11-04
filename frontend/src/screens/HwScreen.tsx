@@ -564,7 +564,7 @@ export function HwScreen() {
   const now = useMemo(() => new Date(), []);
 
   const [tab, setTab] = useState<TabId>("dash");
-  const [view, setView] = useState<ViewId>("projects");
+  const [view, setView] = useState<ViewId>("overall");
   const [period, setPeriod] = useState("ytd");
   const [deviceFilter, setDeviceFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -616,6 +616,20 @@ export function HwScreen() {
     const matched = HW_PROJECTS.filter((p) => allowed.has(p));
     return matched.length ? matched : [...HW_PROJECTS];
   }, [hasAllProjectAccess, user?.projects]);
+
+  useEffect(() => {
+    if (hasAllProjectAccess) return;
+    setView("projects");
+    if (accessProjects.length === 1 && projectFilter !== accessProjects[0]) {
+      setProjectFilter(accessProjects[0]!);
+    } else if (
+      projectFilter &&
+      accessProjects.length > 1 &&
+      !accessProjects.includes(projectFilter)
+    ) {
+      setProjectFilter("");
+    }
+  }, [hasAllProjectAccess, accessProjects, projectFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1018,6 +1032,7 @@ export function HwScreen() {
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={!hasAllProjectAccess}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],

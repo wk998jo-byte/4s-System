@@ -382,20 +382,27 @@ export function nowLocal(): string {
   return `${ast.getFullYear()}-${pad(ast.getMonth() + 1)}-${pad(ast.getDate())}T${pad(ast.getHours())}:${pad(ast.getMinutes())}`;
 }
 
-/** View seg where only "By Project" is selectable (Over All / By Department disabled). */
+/**
+ * View seg for dashboards.
+ * When `restrictToProject` is true (assigned operators), only By Project is clickable.
+ * Admins / all-project users keep Over All and By Department enabled.
+ */
 export function ProjectOnlyViewSeg<T extends string>({
   view,
   setView,
   options,
+  restrictToProject = false,
 }: {
   view: T;
   setView: (next: T) => void;
   options: ReadonlyArray<readonly [T, string]>;
+  /** Lock Over All / By Department for project-scoped users only. */
+  restrictToProject?: boolean;
 }) {
   return (
     <>
       {options.map(([id, label]) => {
-        const locked = id !== "projects";
+        const locked = restrictToProject && id !== "projects";
         return (
           <button
             key={id}
@@ -403,7 +410,7 @@ export function ProjectOnlyViewSeg<T extends string>({
             className={view === id ? "on" : undefined}
             disabled={locked}
             aria-disabled={locked}
-            title={locked ? "Only By Project is available here" : undefined}
+            title={locked ? "Only By Project is available for your access" : undefined}
             onClick={() => {
               if (!locked) setView(id);
             }}

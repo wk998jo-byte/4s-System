@@ -770,7 +770,7 @@ function exportCsv(ops: OpRow[]) {
 export function PerformanceScreen() {
   const projects = useList("project");
   const departments = useList("department");
-  const [view, setView] = useState<ViewId>("projects");
+  const [view, setView] = useState<ViewId>("overall");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
@@ -1026,6 +1026,7 @@ export function PerformanceScreen() {
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={projectAccess.isProjectScoped}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],

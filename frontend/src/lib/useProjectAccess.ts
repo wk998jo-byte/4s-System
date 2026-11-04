@@ -7,7 +7,7 @@ import { useList } from "../screens/shared";
  * Admin or empty/null `user.projects` = all projects.
  * Otherwise filters are limited to the assigned project labels.
  */
-export function useProjectAccess(catalogProjects: string[]) {
+export function useProjectAccess(catalogProjects: readonly string[]) {
   const { user } = useAuth();
 
   const hasAllProjectAccess = useMemo(() => {

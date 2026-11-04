@@ -1263,7 +1263,7 @@ export function WearablesScreen({
   const [hw, setHw] = useState<HwPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<WearablesView>("projects");
+  const [view, setView] = useState<WearablesView>("overall");
   const [project, setProject] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [customFrom, setCustomFrom] = useState("");
@@ -1502,6 +1502,7 @@ export function WearablesScreen({
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={projectAccess.isProjectScoped}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],

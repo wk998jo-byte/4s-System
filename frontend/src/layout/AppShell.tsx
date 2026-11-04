@@ -284,10 +284,11 @@ export function AppShell({
   } | null>(null);
 
   const accessLabel = useMemo(() => {
+    if (user?.role === "admin") return "All projects";
     const projects = user?.projects;
     if (!projects?.length) return "All projects";
     return projects.join(" · ");
-  }, [user?.projects]);
+  }, [user?.role, user?.projects]);
 
   useEffect(() => {
     const ping = async () => {

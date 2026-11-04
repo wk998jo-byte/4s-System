@@ -747,7 +747,7 @@ export function KpiScreen() {
   const [hw, setHw] = useState<HwPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ViewId>("projects");
+  const [view, setView] = useState<ViewId>("overall");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
@@ -796,12 +796,23 @@ export function KpiScreen() {
     return list.length ? list.slice(0, Math.max(4, list.length)) : catalogProjects.slice(0, 4);
   }, [projectAccess.accessProjects, catalogProjects]);
 
+  const catalogDepartments = useMemo(
+    () => departmentList.items.map((d) => d.label).filter(Boolean),
+    [departmentList.items],
+  );
+
   const scoped = useMemo(() => {
     return cases.filter((row) => {
       if (!rowAllowedForProjects(row.project, projectAccess)) return false;
       if (!inPeriod(row, selectedRange.a, selectedRange.b)) return false;
-      if (view === "projects" && project && row.project !== project) return false;
-      if (view === "departments" && department && row.department !== department) return false;
+      if (view === "projects") {
+        if (!row.project) return false;
+        if (project && row.project !== project) return false;
+      }
+      if (view === "departments") {
+        if (!row.department) return false;
+        if (department && row.department !== department) return false;
+      }
       return true;
     });
   }, [cases, selectedRange, view, project, department, projectAccess]);
@@ -816,19 +827,42 @@ export function KpiScreen() {
     [scoped, hw, view, project],
   );
 
-  const byProject = useMemo(
-    () =>
-      projects.map((name) => {
-        const rows = scoped.filter((r) => r.project === name);
-        const metrics = computeMetrics(rows, hw, name);
+  const scorecard = useMemo(() => {
+    if (view === "departments") {
+      const names = department
+        ? [department]
+        : catalogDepartments.length
+          ? catalogDepartments
+          : [
+              ...new Set(
+                scoped.map((r) => r.department).filter(Boolean) as string[],
+              ),
+            ];
+      return names.map((name) => {
+        const rows = scoped.filter((r) => r.department === name);
+        const metrics = computeMetrics(rows, hw, null);
         return { name, metrics, score: scoreOf(metrics) };
-      }),
-    [projects, scoped, hw],
-  );
+      });
+    }
+    const names = view === "projects" && project ? [project] : projects;
+    return names.map((name) => {
+      const rows = scoped.filter((r) => r.project === name);
+      const metrics = computeMetrics(rows, hw, name);
+      return { name, metrics, score: scoreOf(metrics) };
+    });
+  }, [
+    view,
+    department,
+    project,
+    catalogDepartments,
+    projects,
+    scoped,
+    hw,
+  ]);
 
   const ranked = useMemo(
-    () => [...byProject].sort((a, b) => b.score - a.score),
-    [byProject],
+    () => [...scorecard].sort((a, b) => b.score - a.score),
+    [scorecard],
   );
 
   const monthCount = nowDate.getMonth() + 1;
@@ -840,14 +874,20 @@ export function KpiScreen() {
     for (let i = 0; i < monthCount; i += 1) {
       const a = new Date(year, i, 1).getTime();
       const b = Math.min(new Date(year, i + 1, 1).getTime() - 1, nowMs);
-      const rs = cases.filter(
-        (r) =>
-          r.record_type !== "itqan" &&
-          rowAllowedForProjects(r.project, projectAccess) &&
-          inPeriod(r, a, b) &&
-          (view !== "projects" || !project || r.project === project) &&
-          (view !== "departments" || !department || r.department === department),
-      );
+      const rs = cases.filter((r) => {
+        if (r.record_type === "itqan") return false;
+        if (!rowAllowedForProjects(r.project, projectAccess)) return false;
+        if (!inPeriod(r, a, b)) return false;
+        if (view === "projects") {
+          if (!r.project) return false;
+          if (project && r.project !== project) return false;
+        }
+        if (view === "departments") {
+          if (!r.department) return false;
+          if (department && r.department !== department) return false;
+        }
+        return true;
+      });
       const done = rs.filter(isDone);
       onTime.push(pct(done.filter(isOnTime).length, done.length));
       closure.push(pct(rs.filter((r) => r.status === "closed").length, rs.length));
@@ -856,24 +896,40 @@ export function KpiScreen() {
   }, [cases, monthCount, year, nowMs, view, project, department, projectAccess]);
 
   const heat = useMemo(() => {
-    const rows = projects.map((name) => {
+    const names =
+      view === "departments"
+        ? department
+          ? [department]
+          : catalogDepartments.slice(0, 8)
+        : view === "projects" && project
+          ? [project]
+          : projects;
+    const rows = names.map((name) => {
       const counts = Array.from({ length: monthCount }, (_, i) => {
         const a = new Date(year, i, 1).getTime();
         const b = Math.min(new Date(year, i + 1, 1).getTime() - 1, nowMs);
-        return cases.filter(
-          (r) =>
-            (r.record_type === "dashcam" || r.record_type === "speed") &&
-            r.project === name &&
-            inPeriod(r, a, b) &&
-            (view !== "projects" || !project || r.project === project) &&
-            (view !== "departments" || !department || r.department === department),
-        ).length;
+        return cases.filter((r) => {
+          if (r.record_type !== "dashcam" && r.record_type !== "speed") return false;
+          if (!inPeriod(r, a, b)) return false;
+          if (view === "departments") return r.department === name;
+          return r.project === name;
+        }).length;
       });
       return { name, counts };
     });
     const max = Math.max(1, ...rows.flatMap((r) => r.counts));
     return { rows, max };
-  }, [projects, monthCount, year, nowMs, cases, view, project, department]);
+  }, [
+    projects,
+    catalogDepartments,
+    monthCount,
+    year,
+    nowMs,
+    cases,
+    view,
+    project,
+    department,
+  ]);
 
   const offenders = useMemo(() => {
     const map = new Map<string, number>();
@@ -914,24 +970,41 @@ export function KpiScreen() {
       labels: weeks.map((w) => w.label),
       observations: weeks.map(
         (w) =>
-          cases.filter(
-            (r) =>
-              r.record_type === "ai_camera" &&
-              inPeriod(r, w.a, w.b) &&
-              (view !== "projects" || !project || r.project === project),
-          ).length,
+          cases.filter((r) => {
+            if (r.record_type !== "ai_camera" || !inPeriod(r, w.a, w.b)) return false;
+            if (view === "projects") {
+              if (!r.project) return false;
+              if (project && r.project !== project) return false;
+            }
+            if (view === "departments") {
+              if (!r.department) return false;
+              if (department && r.department !== department) return false;
+            }
+            return true;
+          }).length,
       ),
       violations: weeks.map(
         (w) =>
-          cases.filter(
-            (r) =>
-              (r.record_type === "dashcam" || r.record_type === "speed") &&
-              inPeriod(r, w.a, w.b) &&
-              (view !== "projects" || !project || r.project === project),
-          ).length,
+          cases.filter((r) => {
+            if (
+              (r.record_type !== "dashcam" && r.record_type !== "speed") ||
+              !inPeriod(r, w.a, w.b)
+            ) {
+              return false;
+            }
+            if (view === "projects") {
+              if (!r.project) return false;
+              if (project && r.project !== project) return false;
+            }
+            if (view === "departments") {
+              if (!r.department) return false;
+              if (department && r.department !== department) return false;
+            }
+            return true;
+          }).length,
       ),
     };
-  }, [cases, nowDate, nowMs, view, project]);
+  }, [cases, nowDate, nowMs, view, project, department]);
 
   type TargetCard = {
     title: string;
@@ -1024,6 +1097,7 @@ export function KpiScreen() {
             <ProjectOnlyViewSeg
               view={view}
               setView={setView}
+              restrictToProject={projectAccess.isProjectScoped}
               options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
@@ -1195,9 +1269,14 @@ export function KpiScreen() {
       <article className="v1-card">
         <div className="hd">
           <div>
-            <h3>Project scorecard</h3>
+            <h3>{view === "departments" ? "Department scorecard" : "Project scorecard"}</h3>
             <p className="sub">
               Score = on-time 35% · closure 25% · ITQAN 15% · SafeLife 10% · overdue 15%
+              {view === "projects" && !project
+                ? " · project-assigned records only"
+                : view === "departments" && !department
+                  ? " · department-assigned records only"
+                  : ""}
             </p>
           </div>
         </div>
@@ -1206,7 +1285,7 @@ export function KpiScreen() {
             <thead>
               <tr>
                 <th>Rank</th>
-                <th>Project</th>
+                <th>{view === "departments" ? "Department" : "Project"}</th>
                 <th className="n">Records</th>
                 <th className="n">On time</th>
                 <th className="n">Closure</th>
@@ -1263,13 +1342,13 @@ export function KpiScreen() {
         <article className="v1-card kpi-chart-card">
           <div className="hd">
             <div>
-              <h3>Project comparison</h3>
+              <h3>{view === "departments" ? "Department comparison" : "Project comparison"}</h3>
               <p className="sub">Each axis is 0–100, higher is better</p>
             </div>
           </div>
           <RadarChart
-            projects={byProject.map((p) => p.name)}
-            series={byProject.map((p) => [
+            projects={scorecard.map((p) => p.name)}
+            series={scorecard.map((p) => [
               p.metrics.sla,
               p.metrics.closure,
               p.metrics.itq,

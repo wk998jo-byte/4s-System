@@ -292,6 +292,7 @@ class PlatformStore:
         self._migrate_sos_devices_split()
         self._migrate_hw_catalog_v1()
         self._seed_hw_inventory_v1()
+        self._seed_hw_department_v1()
         self._seed_asset_classifications()
         self._seed_users()
         self._ensure_sla_deadlines()
@@ -1087,9 +1088,52 @@ class PlatformStore:
                 session.add(AppStateRow(key="hw", value=value))
             session.commit()
 
+    def _seed_hw_department_v1(self) -> None:
+        """Seed department device counts from the admin department list when empty."""
+        state = self._align_hw(self._hw_state())
+        dept = state.get("department") or {}
+        current = sum(sum(int(n or 0) for n in counts.values()) for counts in dept.values())
+        if current > 0:
+            return
+        departments = [item["label"] for item in self.catalog.get("department")]
+        if not departments:
+            return
+        # Department inventory is GPS + Dashcam heavy (historic AVL / dashcam deploy).
+        device_totals = [("GPS", 1980), ("Dashcam", 668), ("AI Camera", 12)]
+        matrix = self._empty_hw_dept()
+        for dtype, total in device_totals:
+            used = 0
+            for i, name in enumerate(departments):
+                if dtype not in matrix[name]:
+                    matrix[name][dtype] = 0
+                if i == len(departments) - 1:
+                    n = max(0, total - used)
+                else:
+                    n = max(0, round(total / len(departments)))
+                    used += n
+                matrix[name][dtype] = n
+        with self._lock, self._sessions() as session:
+            row = session.get(AppStateRow, "hw")
+            value = {
+                "project": {
+                    site: dict(counts) for site, counts in state["project"].items()
+                },
+                "department": matrix,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if row:
+                row.value = value
+                flag_modified(row, "value")
+            else:
+                session.add(AppStateRow(key="hw", value=value))
+            session.commit()
+
     def _empty_hw_dept(self) -> dict[str, dict[str, int]]:
+        types = [item["label"] for item in self.catalog.get("scc_device_type")]
+        if not types:
+            types = ["GPS", "Dashcam", "AI Camera", "Smart Helmet", "Smart Watch", "Weather Station"]
         return {
-            item["label"]: {"avl": 0, "dashcam": 0}
+            item["label"]: {dtype: 0 for dtype in types}
             for item in self.catalog.get("department")
         }
 
@@ -2619,10 +2663,21 @@ class PlatformStore:
                 )
             for dtype in counts:
                 counts[dtype] = int(previous.get(dtype, 0) or 0)
+        legacy_dept = {"avl": "GPS", "dashcam": "Dashcam"}
+        type_aliases = {label.lower(): label for label in next(iter(dept.values()), {})}
+        type_aliases.update({old.lower(): new for old, new in legacy_dept.items()})
         for name, counts in dept.items():
-            previous = saved_dept.get(name) or {}
+            previous = dict(saved_dept.get(name) or {})
+            # Normalize legacy / mismatched keys onto current catalog labels.
+            normalized: dict[str, int] = {}
+            for raw_key, raw_val in previous.items():
+                canon = type_aliases.get(str(raw_key).lower(), str(raw_key))
+                normalized[canon] = normalized.get(canon, 0) + int(raw_val or 0)
+            for old_key, new_key in legacy_dept.items():
+                if old_key in previous and new_key not in normalized:
+                    normalized[new_key] = int(previous.get(old_key, 0) or 0)
             for key in counts:
-                counts[key] = int(previous.get(key, 0) or 0)
+                counts[key] = int(normalized.get(key, 0) or 0)
         return {
             "project": project,
             "department": dept,
