@@ -24,7 +24,9 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import { useList } from "./shared";
+import {useList,
+  ProjectOnlyViewSeg,
+} from "./shared";
 
 /* Dashboard device tiles — values come from SCC Hardware (mapped labels). */
 const DEVICE_TYPES = [
@@ -1482,7 +1484,7 @@ export function DashboardScreen({
   const projectList = useList("project");
   const departmentList = useList("department");
 
-  const [view, setView] = useState<DashView>("overall");
+  const [view, setView] = useState<DashView>("projects");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -1955,22 +1957,15 @@ export function DashboardScreen({
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
         </div>
         {view === "projects" ? (

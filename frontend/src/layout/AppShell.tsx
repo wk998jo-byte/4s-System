@@ -8,6 +8,7 @@ import { ROLE_LABEL } from "../auth/types";
 import { errorMessage } from "../lib/errors";
 import { href, routeTitle, type Route } from "../lib/routing";
 import { formatUserLabel } from "../screens/shared";
+import bqLogo from "../assets/bq-logo-white.png";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 type NotifTab = "all" | "esc" | "over" | "soon";
@@ -395,6 +396,7 @@ export function AppShell({
     <div className="app-v1">
       <aside className="rail" aria-label="Main navigation">
         <div className="rail-brand">
+          <img src={bqLogo} alt="Bin Quraya" className="rail-logo" />
           <div className="rail-prod">
             <b>SCC Platform</b>
           </div>

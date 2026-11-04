@@ -30,8 +30,7 @@ import {
 import { AssetFields } from "./AssetFields";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { DashcamRecordDrawer } from "./DashcamRecordDrawer";
-import {
-  SelectList,
+import {SelectList,
   SignedInNameField,
   StatusPill,
   RiskPill,
@@ -40,6 +39,7 @@ import {
   useList,
   useSignedInName,
   weekFromIsoDate,
+  ProjectOnlyViewSeg,
 } from "./shared";
 
 type DashView = "overall" | "projects" | "departments";
@@ -1720,7 +1720,7 @@ export function DashcamScreen({
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<DashView>("overall");
+  const [view, setView] = useState<DashView>("projects");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
@@ -2030,22 +2030,15 @@ export function DashcamScreen({
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
           {view === "projects" ? (
             <select

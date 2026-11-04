@@ -14,7 +14,9 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import { formatUserLabel, useList } from "./shared";
+import {formatUserLabel, useList,
+  ProjectOnlyViewSeg,
+} from "./shared";
 
 type PeriodId =
   | "today"
@@ -768,7 +770,7 @@ function exportCsv(ops: OpRow[]) {
 export function PerformanceScreen() {
   const projects = useList("project");
   const departments = useList("department");
-  const [view, setView] = useState<ViewId>("overall");
+  const [view, setView] = useState<ViewId>("projects");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
@@ -1021,22 +1023,15 @@ export function PerformanceScreen() {
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
         </div>
         {view === "projects" ? (

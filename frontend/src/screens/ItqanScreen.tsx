@@ -26,14 +26,14 @@ import {
 } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { ItqanRecordDrawer } from "./ItqanRecordDrawer";
-import {
-  SelectList,
+import {SelectList,
   SignedInNameField,
   nowLocal,
   todayIso,
   useList,
   useSignedInName,
   weekFromIsoDate,
+  ProjectOnlyViewSeg,
 } from "./shared";
 
 type ItqanView = "overall" | "projects" | "departments";
@@ -1141,7 +1141,7 @@ export function ItqanScreen({
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ItqanView>("overall");
+  const [view, setView] = useState<ItqanView>("projects");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
@@ -1295,22 +1295,15 @@ export function ItqanScreen({
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
           {view === "projects" ? (
             <select

@@ -382,6 +382,40 @@ export function nowLocal(): string {
   return `${ast.getFullYear()}-${pad(ast.getMonth() + 1)}-${pad(ast.getDate())}T${pad(ast.getHours())}:${pad(ast.getMinutes())}`;
 }
 
+/** View seg where only "By Project" is selectable (Over All / By Department disabled). */
+export function ProjectOnlyViewSeg<T extends string>({
+  view,
+  setView,
+  options,
+}: {
+  view: T;
+  setView: (next: T) => void;
+  options: ReadonlyArray<readonly [T, string]>;
+}) {
+  return (
+    <>
+      {options.map(([id, label]) => {
+        const locked = id !== "projects";
+        return (
+          <button
+            key={id}
+            type="button"
+            className={view === id ? "on" : undefined}
+            disabled={locked}
+            aria-disabled={locked}
+            title={locked ? "Only By Project is available here" : undefined}
+            onClick={() => {
+              if (!locked) setView(id);
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
 export function speedSummaryPreview(
   kindLabel: string,
   vehicleLabel: string,

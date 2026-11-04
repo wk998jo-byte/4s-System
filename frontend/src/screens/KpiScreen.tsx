@@ -13,7 +13,9 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import { useList } from "./shared";
+import {useList,
+  ProjectOnlyViewSeg,
+} from "./shared";
 
 type PeriodId =
   | "today"
@@ -745,7 +747,7 @@ export function KpiScreen() {
   const [hw, setHw] = useState<HwPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ViewId>("overall");
+  const [view, setView] = useState<ViewId>("projects");
   const [project, setProject] = useState("");
   const [department, setDepartment] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
@@ -1019,22 +1021,15 @@ export function KpiScreen() {
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
         </div>
         {view === "projects" ? (

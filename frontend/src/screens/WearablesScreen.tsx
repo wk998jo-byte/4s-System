@@ -30,14 +30,14 @@ import {
 } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { SosRecordDrawer } from "./SosRecordDrawer";
-import {
-  SelectList,
+import {SelectList,
   SignedInNameField,
   StatusPill,
   nowLocal,
   useList,
   useSignedInName,
   weekFromIsoDate,
+  ProjectOnlyViewSeg,
 } from "./shared";
 
 type WearablesView = "overall" | "projects";
@@ -1263,7 +1263,7 @@ export function WearablesScreen({
   const [hw, setHw] = useState<HwPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<WearablesView>("overall");
+  const [view, setView] = useState<WearablesView>("projects");
   const [project, setProject] = useState("");
   const [period, setPeriod] = useState<PeriodId>("ytd");
   const [customFrom, setCustomFrom] = useState("");
@@ -1499,21 +1499,14 @@ export function WearablesScreen({
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
           {view === "projects" ? (
             <select

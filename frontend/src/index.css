@@ -3812,7 +3812,8 @@ html.theme-dark .login-card input:disabled {
 /* ===== V1 shell ===== */
 .app-v1{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;background:var(--bg);color:var(--ink)}
 .rail{background:var(--rail);color:var(--rail-ink);position:sticky;top:0;height:100vh;display:flex;flex-direction:column;border-right:1px solid var(--rail-line);z-index:30}
-.rail-brand{padding:18px 18px 14px;border-bottom:1px solid var(--rail-line);display:flex;flex-direction:column;gap:10px}
+.rail-brand{padding:16px 18px 14px;border-bottom:1px solid var(--rail-line);display:flex;flex-direction:column;gap:10px}
+.rail-logo{display:block;width:100%;max-width:188px;height:auto;object-fit:contain;margin:0 0 2px}
 .rail-prod b{font-family:var(--f-display);font-size:19px;letter-spacing:.04em;text-transform:uppercase;font-weight:700}
 .rail-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--rail-muted)}
 .rail-dot{width:7px;height:7px;border-radius:50%;background:#4CC46F;box-shadow:0 0 0 3px rgba(76,196,111,.18);display:inline-block}
@@ -3920,6 +3921,7 @@ html.theme-dark .login-card input:disabled {
 .v1-filters .seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
 .v1-filters .seg button{border:0;background:transparent;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;white-space:nowrap}
 .v1-filters .seg button.on{background:var(--ink);color:var(--bg)}
+.v1-filters .seg button:disabled{opacity:.45;cursor:not-allowed;color:var(--muted)}
 .v1-filters select.sel{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 26px 6px 9px;font-size:13px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px;background-repeat:no-repeat}
 .v1-filters input.inp[type=date]{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:13px}
 .v1-spark{display:block;margin-top:2px}
