@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import bqLogo from "../assets/bq-logo-white.png";
 import { useAuth } from "../auth/AuthContext";
+import { useProjectAccess } from "../lib/useProjectAccess";
 import {
   ARAMCO_EMERGENCY,
   CONTACTS_BY_PROJECT,
   CONTACT_PROJECTS,
   type ContactProjectId,
-  type ProjectContacts,
 } from "../lib/contactsData";
 
 function PhoneIcon() {
@@ -139,13 +139,40 @@ function ContactTable({
   );
 }
 
+function defaultContactProject(
+  accessProjects: string[],
+  singleProject: string | null,
+): ContactProjectId {
+  const catalog = CONTACT_PROJECTS as readonly string[];
+  if (singleProject && catalog.includes(singleProject)) {
+    return singleProject as ContactProjectId;
+  }
+  const firstAssigned = accessProjects.find((p) => catalog.includes(p));
+  if (firstAssigned) return firstAssigned as ContactProjectId;
+  return "Jafurah";
+}
+
 export function ContactsScreen() {
   const { user } = useAuth();
   const canWrite = Boolean(user?.capabilities.manage_contacts || user?.role === "admin");
-  const [project, setProject] = useState<ContactProjectId>("Dhahran");
+  const projectAccess = useProjectAccess([...CONTACT_PROJECTS]);
+  const initialProject = useMemo(
+    () =>
+      defaultContactProject(
+        projectAccess.accessProjects,
+        projectAccess.singleProject,
+      ),
+    [projectAccess.accessProjects, projectAccess.singleProject],
+  );
+  const [project, setProject] = useState<ContactProjectId>(initialProject);
   const [packs, setPacks] = useState(() => structuredClone(CONTACTS_BY_PROJECT));
   const [editing, setEditing] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+
+  useEffect(() => {
+    setProject(initialProject);
+    setEditing(false);
+  }, [initialProject]);
 
   const pack = packs[project];
 
@@ -201,7 +228,6 @@ export function ContactsScreen() {
                 if (editing) toast("Contacts saved");
                 setEditing((v) => !v);
               }}
-              disabled={Boolean(pack.placeholder)}
             >
               <PenIcon />
               {editing ? "Done editing" : "Edit contacts"}
@@ -211,45 +237,29 @@ export function ContactsScreen() {
       </section>
 
       <div className="reports-tabs kp-tabs">
-        {CONTACT_PROJECTS.map((id) => {
-          const item = packs[id];
-          const disabled = Boolean(item.placeholder);
-          return (
-            <button
-              key={id}
-              type="button"
-              className={project === id ? "on" : undefined}
-              disabled={disabled && id !== project}
-              title={disabled ? "Coming soon — contacts will be added later" : undefined}
-              onClick={() => {
-                if (disabled) return;
-                setProject(id);
-                setEditing(false);
-              }}
-            >
-              {id}
-            </button>
-          );
-        })}
+        {CONTACT_PROJECTS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className={project === id ? "on" : undefined}
+            onClick={() => {
+              setProject(id);
+              setEditing(false);
+            }}
+          >
+            {id}
+          </button>
+        ))}
       </div>
 
       {flash ? <p className="hw-flash">{flash}</p> : null}
-
-      {pack.placeholder ? (
-        <div className="kp-note">
-          <PenIcon />
-          <span>
-            {project} contacts are waiting for the project team. Admin fills them in with{" "}
-            <b>Edit contacts</b>, using the Dhahran list as the format.
-          </span>
-        </div>
-      ) : null}
 
       <section className="kp-pack">
         <div className="kp-pack-banner">
           <img src={bqLogo} alt="Bin Quraya" className="kp-logo" />
           <div className="kp-pack-title">
             <h2>{pack.client.toUpperCase()}</h2>
+            <p>{pack.title}</p>
           </div>
           <span className="kp-tag">Saudi Aramco</span>
         </div>

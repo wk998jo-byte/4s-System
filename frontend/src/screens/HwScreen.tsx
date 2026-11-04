@@ -20,7 +20,7 @@ import {
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
-import { formatUserLabel } from "./shared";
+import { formatUserLabel, ProjectOnlyViewSeg } from "./shared";
 import { useChartReveal } from "../lib/useChartReveal";
 import {
   buildDeviceRegister,
@@ -564,7 +564,7 @@ export function HwScreen() {
   const now = useMemo(() => new Date(), []);
 
   const [tab, setTab] = useState<TabId>("dash");
-  const [view, setView] = useState<ViewId>("overall");
+  const [view, setView] = useState<ViewId>("projects");
   const [period, setPeriod] = useState("ytd");
   const [deviceFilter, setDeviceFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -1015,22 +1015,15 @@ export function HwScreen() {
         <div className="grp">
           <label className="k">View</label>
           <div className="seg">
-            {(
-              [
+            <ProjectOnlyViewSeg
+              view={view}
+              setView={setView}
+              options={[
                 ["overall", "Over All"],
                 ["projects", "By Project"],
                 ["departments", "By Department"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={view === id ? "on" : undefined}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+              ]}
+            />
           </div>
         </div>
         {view === "projects" ? (

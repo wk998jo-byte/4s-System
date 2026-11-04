@@ -4946,6 +4946,7 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .kp-logo{width:140px;height:auto;flex:none;object-fit:contain;display:block}
 .kp-pack-title{flex:1;min-width:0;text-align:center;color:#fff}
 .kp-pack-title h2{margin:0;font-family:var(--f-display);font-size:clamp(20px,2.4vw,28px);font-weight:800;letter-spacing:.03em;color:#fff}
+.kp-pack-title p{margin:4px 0 0;font-size:12.5px;font-weight:600;color:rgba(255,255,255,.82);letter-spacing:.02em}
 .kp-tag{flex:none;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.08);font-size:12px;font-weight:700;color:#fff;white-space:nowrap}
 .kp-pack-body{padding:14px 16px;display:flex;flex-direction:column;gap:14px}
 .kp-section{display:flex;flex-direction:column}

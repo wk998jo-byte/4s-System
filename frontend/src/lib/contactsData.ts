@@ -1,4 +1,4 @@
-/** V1 Key Personnel & Emergency Contacts seed (Dhahran sample). */
+/** Key Personnel & Emergency Contacts — empty template per project. */
 
 export type ContactPerson = {
   name: string;
@@ -22,7 +22,6 @@ export type ProjectContacts = {
 };
 
 export const CONTACT_PROJECTS = [
-  "Dhahran",
   "Jafurah",
   "MGS",
   "Yanbu",
@@ -66,95 +65,63 @@ export const ARAMCO_EMERGENCY = {
   aramcoNote: "To report an emergency in Aramco: call 911, or 013-576-7911 from a mobile.",
 };
 
-function people(rows: Array<[string, string, string]>): ContactPerson[] {
-  return rows.map(([name, position, number]) => ({ name, position, number }));
+function emptyRows(positions: string[]): ContactPerson[] {
+  return positions.map((position) => ({
+    name: "[Name]",
+    position,
+    number: "[Number]",
+  }));
 }
 
-export const CONTACTS_BY_PROJECT: Record<ContactProjectId, ProjectContacts> = {
-  Dhahran: {
-    id: "Dhahran",
-    title: "Dhahran – Key Personnel & 24 Hours Emergency Contacts (format from the Zuluf sheet)",
-    client: "Dhahran",
+/** Shared empty layout used for every project until Admin fills names/numbers. */
+function emptyProjectPack(id: ContactProjectId): ProjectContacts {
+  return {
+    id,
+    title: `${id} Project – Key Personnel & Emergency Contacts`,
+    client: "Saudi Aramco",
+    placeholder: false,
     groups: [
       {
-        name: "Saudi Aramco SAPMT",
-        rows: people([
-          ["Hamad Balhareth", "Company Representative", "0556000394"],
-          ["Mustafa J. Muailo", "SAPMT Project Engineer", "0537098628"],
-          ["Ali F. Khan", "SAPMT Project Engineer", "0539300151"],
-          ["Bader Dayhani", "SAPMT Project Engineer", "0500705650"],
-          ["Junrey G. Navarro", "SAPMT HSE Div. Lead", "0535204589"],
-          ["Sulaiman Aloqaily", "SAPMT Safety Advisor", "0501822828"],
-          ["Abdulaziz Alserwan", "SAPMT Safety Advisor", "0558652670"],
-          ["Qasem Alajam", "SAPMT Safety Advisor", "0569955114"],
-          ["Khalid M Shuqayfah", "SAPMT Safety Advisor", "0536287137"],
+        name: "Saudi Aramco Client Team",
+        rows: emptyRows([
+          "Company Representative",
+          "Project Engineer",
+          "HSE Division Lead",
+          "Safety Advisor",
         ]),
       },
       {
         name: "Bin Quraya 24 Hours Emergency Contact Number",
         red: true,
-        rows: people([
-          ["Claudio Catroppa", "Contractor Representative", "0550933266"],
-          ["Mohammed Osman", "Project Manager", "0569268702"],
-          ["Faheem Shahzad", "Construction Manager", "0549529097"],
-          ["Rene Oliveria", "HSE Manager", "0599005288"],
-          ["Mariano Jayme Jr.", "Sr. HSE Supervisor", "0542598087"],
-          ["Ahamad Salim", "HSE Supervisor", "0510533406"],
-          ["Shoaib Ijaz", "Environmental Coordinator", "0576697517"],
-          ["Syed Ibrahim", "Camp Boss", "0543878827"],
-          ["Byju Thomas", "Project Medic (Male Nurse)", "0537255731"],
-          ["Nasir Abdulwahab", "Ambulance Driver", "0501408784"],
-          ["Edwin Galano", "PWAS Coordinator", "0572110143"],
-          ["Abdhulla", "Aramco Issuer", "0557619616"],
+        rows: emptyRows([
+          "Project Manager",
+          "Construction Manager",
+          "HSE Manager",
+          "HSE Supervisor",
+          "Project Medic",
+          "Ambulance Driver",
         ]),
       },
       {
-        name: "First Aiders @ Site",
-        rows: people([
-          ["Jonathan Maranan", "First Aider Team Leader", "0568188934"],
-          ["Wencis Bahunsua", "First Aider", "0561058092"],
-          ["Allan Flor", "First Aider", "0541035238"],
-          ["Farhan Murtaza", "First Aider", "0592725142"],
-          ["Shakeel Ahmed Lal", "First Aider", "0594832171"],
+        name: "SCC Team",
+        rows: emptyRows([
+          "SCC Supervisor",
+          "SCC Operator (Day)",
+          "SCC Operator (Night)",
         ]),
       },
+      {
+        name: "Emergency Response Team (ERT)",
+        rows: emptyRows(["ERT Leader", "First Aider", "Fire Watch Lead"]),
+      },
     ],
-    hospitals: [
-      { name: "Al Nairiah General Hospital", number: "013-373-1000" },
-      { name: "Health and Safety Medical Complex", number: "013-373-0033" },
-      { name: "Maiden Hospital", number: "013-373-0221" },
-    ],
-  },
-  Jafurah: {
-    id: "Jafurah",
-    title: "Jafurah Project – Key Personnel & Emergency Contacts",
-    client: "Saudi Aramco",
-    placeholder: true,
-    groups: [],
-    hospitals: [],
-  },
-  MGS: {
-    id: "MGS",
-    title: "MGS Project – Key Personnel & Emergency Contacts",
-    client: "Saudi Aramco",
-    placeholder: true,
-    groups: [],
-    hospitals: [],
-  },
-  Yanbu: {
-    id: "Yanbu",
-    title: "Yanbu Project – Key Personnel & Emergency Contacts",
-    client: "Saudi Aramco",
-    placeholder: true,
-    groups: [],
-    hospitals: [],
-  },
-  "Ras Tanura": {
-    id: "Ras Tanura",
-    title: "Ras Tanura Project – Key Personnel & Emergency Contacts",
-    client: "Saudi Aramco",
-    placeholder: true,
-    groups: [],
-    hospitals: [],
-  },
+    hospitals: [{ name: "[Nearest hospital]", number: "[Number]" }],
+  };
+}
+
+export const CONTACTS_BY_PROJECT: Record<ContactProjectId, ProjectContacts> = {
+  Jafurah: emptyProjectPack("Jafurah"),
+  MGS: emptyProjectPack("MGS"),
+  Yanbu: emptyProjectPack("Yanbu"),
+  "Ras Tanura": emptyProjectPack("Ras Tanura"),
 };
