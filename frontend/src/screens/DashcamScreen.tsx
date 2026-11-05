@@ -1090,7 +1090,6 @@ function DashcamNewDrawer({
     driver_badge_number: "",
     rental_driver: false,
     iqama_number: "",
-    location_coordinates: "",
     occurred_on: todayIso(),
     occurred_time: localTime,
     violation_type_id: "",
@@ -1153,7 +1152,6 @@ function DashcamNewDrawer({
     form.driver_name.trim(),
     form.driver_badge_number.trim(),
     form.rental_driver ? form.iqama_number.trim() : "ok",
-    form.location_coordinates.trim(),
     form.occurred_on,
     form.occurred_time,
     form.violation_type_id,
@@ -1186,7 +1184,6 @@ function DashcamNewDrawer({
         driver_badge_number: form.driver_badge_number,
         rental_driver: form.rental_driver,
         iqama_number: form.rental_driver ? form.iqama_number : null,
-        location_coordinates: form.location_coordinates,
         occurred_on: form.occurred_on,
         occurred_time: form.occurred_time,
         violation_type_id: form.violation_type_id,
@@ -1435,21 +1432,6 @@ function DashcamNewDrawer({
             <section className="v1-card dc-span">
               <h3>Alert details</h3>
               <div className="fgrid">
-                <div className="fld full">
-                  <label className="fld-ctl">
-                    <span className="lbl">
-                      Location <span className="req">*</span>
-                    </span>
-                    <input
-                      required
-                      placeholder="Type the location or coordinates"
-                      value={form.location_coordinates}
-                      onChange={(e) =>
-                        setForm({ ...form, location_coordinates: e.target.value })
-                      }
-                    />
-                  </label>
-                </div>
                 <div className="fld">
                   <label className="fld-ctl">
                     <span className="lbl">

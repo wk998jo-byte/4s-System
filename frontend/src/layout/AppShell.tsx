@@ -56,7 +56,7 @@ const NAV: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "Operations",
     items: [
-      { label: "Dashboard", icon: "dashboard", route: { name: "dashboard", tab: "overview" } },
+      { label: "Dashboard", icon: "dashboard", route: { name: "dashboard", tab: "summary" } },
       { label: "AI Camera Observations", icon: "camera", route: { name: "list", type: "ai_camera" } },
       { label: "Dashcam Observations", icon: "car", route: { name: "list", type: "dashcam" } },
       { label: "Speed Violations", icon: "speed", route: { name: "list", type: "speed" } },

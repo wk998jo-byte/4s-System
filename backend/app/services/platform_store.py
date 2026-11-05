@@ -959,7 +959,6 @@ class PlatformStore:
             "dashcam_alert_summary", LIST_SEEDS["dashcam_alert_summary"]
         )
         self._sync_list_labels("ai_camera_category", LIST_SEEDS["ai_camera_category"])
-        self._sync_list_labels("driver_position", LIST_SEEDS["driver_position"])
         self._sync_list_labels("department", LIST_SEEDS["department"])
 
     def list_assets(
@@ -1300,7 +1299,6 @@ class PlatformStore:
                 "driver_badge_number": payload.driver_badge_number,
                 "rental_driver": payload.rental_driver,
                 "iqama_number": iqama,
-                "location_coordinates": payload.location_coordinates,
                 "occurred_time": payload.occurred_time.strftime("%H:%M"),
                 "violation_type": violation,
                 "alert_summary": payload.alert_summary,
@@ -1347,7 +1345,6 @@ class PlatformStore:
                 "asset_number": payload.asset_number,
                 "driver_name": payload.driver_name,
                 "driver_badge_number": payload.driver_badge_number,
-                "position": payload.position,
                 "rental_driver": payload.rental_driver,
                 "iqama_number": iqama,
                 "location_coordinates": payload.location_coordinates,
@@ -1707,7 +1704,6 @@ class PlatformStore:
             "asset_number",
             "driver_name",
             "driver_badge_number",
-            "location_coordinates",
             "alert_summary",
             "iqama_number",
             "rental_driver",
@@ -1719,7 +1715,6 @@ class PlatformStore:
             "asset_number",
             "driver_name",
             "driver_badge_number",
-            "position",
             "location_coordinates",
             "permitted_speed_kmh",
             "vehicle_speed_kmh",
@@ -3294,7 +3289,6 @@ class PlatformStore:
                 "driver_badge_number": demo["badge"],
                 "rental_driver": False,
                 "iqama_number": None,
-                "location_coordinates": demo.get("loc") or f"26.{index % 9}, 50.{index % 9}",
                 "occurred_time": created.strftime("%H:%M"),
                 "violation_type": viol,
                 "alert_summary": summary,
@@ -3368,7 +3362,6 @@ class PlatformStore:
         models = [
             item["label"] for item in self.catalog.get("model") if item.get("is_active")
         ] or ["Bus", "Pickup", "Car", "Van", "Truck"]
-        positions = ["Driver", "Operator", "Supervisor", "Technician"]
         risks = ["High Risk", "Medium Risk", "Low Risk"]
         now = datetime.now(timezone.utc)
 
@@ -3420,7 +3413,6 @@ class PlatformStore:
             kind = kinds[int(demo["kind"]) % len(kinds)]
             vehicle = vehicles[int(demo["veh"]) % len(vehicles)]
             model = models[int(demo["model"]) % len(models)]
-            position = positions[int(demo["pos"]) % len(positions)]
             permitted = float(demo["perm"])
             recorded = float(demo["rec"])
             exceedance = recorded - permitted
@@ -3442,7 +3434,6 @@ class PlatformStore:
                 "asset_number": f"SP-{1900 + index:04d}",
                 "driver_name": demo["driver"],
                 "driver_badge_number": demo["badge"],
-                "position": position,
                 "rental_driver": index % 7 == 0,
                 "iqama_number": f"2{100000000 + index}" if index % 7 == 0 else None,
                 "location_coordinates": demo.get("loc") or f"26.{index % 9}, 49.{index % 9}",

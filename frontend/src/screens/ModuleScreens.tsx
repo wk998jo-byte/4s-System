@@ -676,7 +676,6 @@ export function DashcamForm() {
     driver_badge_number: "",
     rental_driver: false,
     iqama_number: "",
-    location_coordinates: "",
     occurred_on: todayIso(),
     occurred_time: "",
     violation_type_id: "",
@@ -692,7 +691,6 @@ export function DashcamForm() {
     form.driver_name.trim(),
     form.driver_badge_number.trim(),
     form.rental_driver ? form.iqama_number.trim() : "ok",
-    form.location_coordinates.trim(),
     form.occurred_on,
     form.occurred_time,
     form.violation_type_id,
@@ -726,7 +724,6 @@ export function DashcamForm() {
         driver_badge_number: form.driver_badge_number,
         rental_driver: form.rental_driver,
         iqama_number: form.rental_driver ? form.iqama_number : null,
-        location_coordinates: form.location_coordinates,
         occurred_on: form.occurred_on,
         occurred_time: form.occurred_time,
         violation_type_id: form.violation_type_id,
@@ -903,17 +900,6 @@ export function DashcamForm() {
           </article>
           <article className="panel">
             <h3>Alert details</h3>
-            <label>
-              Location Coordinates *
-              <input
-                required
-                placeholder="[Latitude, Longitude]"
-                value={form.location_coordinates}
-                onChange={(event) =>
-                  setForm({ ...form, location_coordinates: event.target.value })
-                }
-              />
-            </label>
             <div className="form-row three">
               <label>
                 Date *

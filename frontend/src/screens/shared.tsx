@@ -35,7 +35,6 @@ export const LIST_LABEL: Record<string, string> = {
   dashcam_observation_type: "DashCam Observation Type",
   ai_camera_category: "AI Camera Category",
   speed_violation_type: "Speed Violation Type",
-  driver_position: "Driver Position",
   detection_method: "Detection Method",
   vehicle_type: "Asset Category",
   model: "Asset Type",

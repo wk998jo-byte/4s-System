@@ -282,7 +282,6 @@ export function DashcamRecordDrawer({
             .join(" / ") || "—",
         ],
         ["Rental", field(row, "rental_driver") === "true" || row.fields?.rental_driver ? "Yes" : "No"],
-        ["Location", field(row, "location_coordinates") || "—"],
         ["Date", `${formatDay(row.date)} (Week ${row.week_number})`],
         ["Time", field(row, "occurred_time") || "—"],
         ["Violation", field(row, "violation_type") || "—"],

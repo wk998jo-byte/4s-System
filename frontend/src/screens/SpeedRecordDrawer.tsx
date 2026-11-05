@@ -283,7 +283,6 @@ export function SpeedRecordDrawer({
             .filter(Boolean)
             .join(" / ") || "—",
         ],
-        ["Position", field(row, "position") || "—"],
         [
           "Rental",
           field(row, "rental_driver") === "true" || row.fields?.rental_driver ? "Yes" : "No",

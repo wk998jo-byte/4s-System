@@ -41,7 +41,8 @@ export function parseHash(hash?: string): Route {
   const params = new URLSearchParams(queryPart ?? "");
   const [a, b] = parts;
   if (a === "dashboard") {
-    const tab = (b as DashTab) || "overview";
+    const rawTab = (b as DashTab) || "summary";
+    const tab = rawTab === "overview" ? "summary" : rawTab;
     return { name: "dashboard", tab };
   }
   if (a && MODULE_SLUGS[a] && b === "new") {
@@ -65,12 +66,14 @@ export function parseHash(hash?: string): Route {
   if (a === "contacts") return { name: "contacts" };
   if (a === "admin") return { name: "admin" };
   if (a === "performance" || a === "operators") return { name: "performance" };
-  return { name: "dashboard", tab: "overview" };
+  return { name: "dashboard", tab: "summary" };
 }
 
 export function href(route: Route): string {
   if (route.name === "dashboard") {
-    return route.tab === "overview" ? "#/dashboard" : `#/dashboard/${route.tab}`;
+    return route.tab === "summary" || route.tab === "overview"
+      ? "#/dashboard"
+      : `#/dashboard/${route.tab}`;
   }
   if (route.name === "list") {
     const base = `#/${MODULE_HREF[route.type]}`;

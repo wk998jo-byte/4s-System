@@ -20,6 +20,7 @@ import {
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
+import { DashboardScreen } from "./DashboardScreen";
 import { formatUserLabel, ProjectOnlyViewSeg } from "./shared";
 import { useChartReveal } from "../lib/useChartReveal";
 import {
@@ -45,7 +46,7 @@ import {
   type HwTransfer,
 } from "../lib/hwData";
 
-type TabId = "dash" | "summary" | "register" | "transfers" | "history";
+type TabId = "fleet" | "dash" | "summary" | "register" | "transfers" | "history";
 type ViewId = "overall" | "projects" | "departments";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -563,7 +564,7 @@ export function HwScreen() {
   const canReceive = Boolean(user?.capabilities.receive_hw);
   const now = useMemo(() => new Date(), []);
 
-  const [tab, setTab] = useState<TabId>("dash");
+  const [tab, setTab] = useState<TabId>("fleet");
   const [view, setView] = useState<ViewId>("overall");
   const [period, setPeriod] = useState("ytd");
   const [deviceFilter, setDeviceFilter] = useState("All");
@@ -1007,7 +1008,8 @@ export function HwScreen() {
       <div className="reports-tabs hw-tabs">
         {(
           [
-            ["dash", "Dashboard"],
+            ["fleet", "Dashboard"],
+            ["dash", "Hardware Status"],
             ["summary", "Dashboard Summary"],
             ["register", "Device Register"],
             ["transfers", `Material Transfers${openTransfers ? ` (${openTransfers})` : ""}`],
@@ -1025,6 +1027,9 @@ export function HwScreen() {
         ))}
       </div>
 
+      {tab === "fleet" ? <DashboardScreen embed="overview" /> : null}
+
+      {tab === "fleet" ? null : (
       <div className="v1-filters">
         <div className="grp">
           <label className="k">View</label>
@@ -1102,6 +1107,7 @@ export function HwScreen() {
           {!hasAllProjectAccess ? ` · ${accessProjects.join(", ")}` : ""}
         </div>
       </div>
+      )}
 
       {flash ? <p className="hw-flash">{flash}</p> : null}
       {error ? <p className="state error">{error}</p> : null}

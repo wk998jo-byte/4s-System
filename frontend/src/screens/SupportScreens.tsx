@@ -266,7 +266,6 @@ function buildReviewBlocks(row: CaseDetail): DetailBlock[] {
           label: "Driver",
           value: `${fieldValue(f.driver_name)} / ${fieldValue(f.driver_badge_number)}`,
         },
-        { label: "Position", value: fieldValue(f.position) },
         { label: "Date", value: dateWeekValue(row) },
         {
           label: "Permitted Speed (Speed Limit)",
@@ -313,7 +312,6 @@ function buildReviewBlocks(row: CaseDetail): DetailBlock[] {
           label: "Driver",
           value: `${fieldValue(f.driver_name)} / ${fieldValue(f.driver_badge_number)}`,
         },
-        { label: "Location Coordinates", value: fieldValue(f.location_coordinates) },
         { label: "Date", value: dateWeekValue(row) },
         { label: "Risk Level", value: row.risk_level || "—" },
         { label: "Reported By", value: fieldValue(f.reported_by) },
@@ -542,7 +540,6 @@ function buildEditDraft(detail: CaseDetail): RecordEditDraft {
             "asset_number",
             "driver_name",
             "driver_badge_number",
-            "location_coordinates",
             "alert_summary",
             "iqama_number",
           ]
@@ -554,7 +551,6 @@ function buildEditDraft(detail: CaseDetail): RecordEditDraft {
               "asset_number",
               "driver_name",
               "driver_badge_number",
-              "position",
               "location_coordinates",
               "permitted_speed_kmh",
               "vehicle_speed_kmh",
@@ -898,15 +894,6 @@ export function RecordReviewDetail({
               />
             </label>
             <label>
-              Location Coordinates
-              <input
-                value={f.location_coordinates ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "location_coordinates", event.target.value))
-                }
-              />
-            </label>
-            <label>
               Risk Level
               <select
                 value={draft.risk_level}
@@ -994,13 +981,6 @@ export function RecordReviewDetail({
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "driver_badge_number", event.target.value))
                 }
-              />
-            </label>
-            <label>
-              Position
-              <input
-                value={f.position ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "position", event.target.value))}
               />
             </label>
             <label>

@@ -1499,25 +1499,25 @@ function RiskStackedChart({
   );
 }
 
-function LocCard({
+function LocBlock({
   title,
   index,
   rows,
   totals,
   roomy = false,
+  heading = "h3",
 }: {
   title: string;
   index: number;
   rows: Array<[string, number[]]>;
   totals: number[];
-  /** Overall AI Camera card only — fuller labels, slightly larger type. */
   roomy?: boolean;
+  heading?: "h3" | "h4";
 }) {
   const entries = rows
     .map(([l, v]) => ({ label: l, value: v[index] }))
     .filter((x) => x.value > 0)
     .sort((a, b) => b.value - a.value);
-  // Two columns when the list is long so the 3/4 card row stays compact.
   const split = entries.length > 7;
   const mid = Math.ceil(entries.length / 2);
   const left = split ? entries.slice(0, mid) : entries;
@@ -1525,13 +1525,12 @@ function LocCard({
   const barColor = (k: string) =>
     k === "Total" ? "var(--ink-2)" : index === 4 || index === 5 ? "var(--red)" : "var(--steel)";
   const scaleMax = Math.max(totals[index] || 0, ...entries.map((e) => e.value), 1);
+  const Heading = heading;
 
   return (
-    <article
-      className={`v1-card v1-loc-card${split ? " is-split" : ""}${roomy ? " is-roomy" : ""}`}
-    >
+    <div className={split ? "is-split" : undefined}>
       <div className="hd">
-        <h3>{title}</h3>
+        <Heading>{title}</Heading>
       </div>
       <p className="sub">
         {entries.length} {entries.length === 1 ? "location" : "locations"}
@@ -1552,18 +1551,124 @@ function LocCard({
       ) : (
         <div className="empty">No devices in this scope.</div>
       )}
+    </div>
+  );
+}
+
+function LocCard({
+  title,
+  index,
+  rows,
+  totals,
+  roomy = false,
+}: {
+  title: string;
+  index: number;
+  rows: Array<[string, number[]]>;
+  totals: number[];
+  /** Overall AI Camera card only — fuller labels, slightly larger type. */
+  roomy?: boolean;
+}) {
+  const entries = rows
+    .map(([, v]) => v[index])
+    .filter((value) => value > 0);
+  const split = entries.length > 7;
+
+  return (
+    <article
+      className={`v1-card v1-loc-card${split ? " is-split" : ""}${roomy ? " is-roomy" : ""}`}
+    >
+      <LocBlock title={title} index={index} rows={rows} totals={totals} roomy={roomy} />
+    </article>
+  );
+}
+
+function NeedsAttention({
+  odAll,
+  odHigh,
+  openConfirm,
+  underReview,
+  sosOpen,
+}: {
+  odAll: number;
+  odHigh: number;
+  openConfirm: number;
+  underReview: number;
+  sosOpen: number;
+}) {
+  return (
+    <article className="v1-card">
+      <div className="hd">
+        <h3>Needs attention</h3>
+      </div>
+      <p className="sub">What is waiting for someone right now</p>
+      <div className="v1-att-grid">
+        {[
+          {
+            ic: "alert",
+            n: odAll,
+            text: `records are overdue for close-out (${odHigh} High risk)`,
+            action: "Open",
+            go: () =>
+              document
+                .querySelector<HTMLButtonElement>('[aria-label="Notifications"]')
+                ?.click(),
+          },
+          {
+            ic: "car",
+            n: openConfirm,
+            text: "Dashcam and Speed violations wait for Confirm Driver & Submit",
+            action: "View",
+            href: href({ name: "review" }),
+          },
+          {
+            ic: "clock",
+            n: underReview,
+            text: "records wait for Admin review",
+            action: "Review",
+            href: href({ name: "review" }),
+          },
+          {
+            ic: "watch",
+            n: sosOpen,
+            text: "SOS alerts are still open",
+            action: "Open",
+            href: href({ name: "list", type: "sos" }),
+          },
+        ].map((a) => (
+          <div className="v1-att" key={a.text}>
+            <span className="ic">
+              <Icon name={a.ic} />
+            </span>
+            <b>{fmtN(a.n)}</b>
+            <span className="txt">{a.text}</span>
+            {a.href ? (
+              <a className="linkbtn" href={a.href}>
+                {a.action} →
+              </a>
+            ) : (
+              <button className="linkbtn" type="button" onClick={a.go}>
+                {a.action} →
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </article>
   );
 }
 
 export function DashboardScreen({
-  tab,
+  embed,
 }: {
-  tab: DashTab;
+  tab?: DashTab;
+  /** Render only the fleet overview inside SCC Hardware. */
+  embed?: "overview";
   dark?: boolean;
   onDark?: (value: boolean) => void;
 }) {
-  const mainTab: "overview" | "summary" = tab === "summary" ? "summary" : "overview";
+  const embedded = embed === "overview";
+  const mainTab: "overview" | "summary" = embedded ? "overview" : "summary";
   const projectList = useList("project");
   const departmentList = useList("department");
 
@@ -1639,7 +1744,12 @@ export function DashboardScreen({
       if (document.visibilityState === "visible") void load();
     };
     const onHash = () => {
-      if (window.location.hash.startsWith("#/dashboard")) void load();
+      const hash = window.location.hash;
+      if (embedded) {
+        if (hash.startsWith("#/scc-hw") || hash.startsWith("#/hw")) void load();
+        return;
+      }
+      if (hash.startsWith("#/dashboard")) void load();
     };
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("hashchange", onHash);
@@ -1647,7 +1757,7 @@ export function DashboardScreen({
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("hashchange", onHash);
     };
-  }, [load]);
+  }, [load, embedded]);
 
   const catalogDepartments = useMemo(
     () =>
@@ -2108,40 +2218,27 @@ export function DashboardScreen({
   }
 
   return (
-    <section className="page v1-dash">
-      <section className="v1-banner dash-hero">
-        <div className="v1-banner-icon">
-          <Icon name="shield" size={32} />
-        </div>
-        <div className="v1-banner-copy">
-          <h1>
-            SAFETY COMMAND CENTER <em>DASHBOARD {year}</em>
-          </h1>
-          <p>
-            Real-Time Monitoring <i>•</i> Smarter Decisions <i>•</i> Safer Operations
-          </p>
-        </div>
-        <div className="v1-banner-actions">
-          <span className="tagx green live">
-            <span className="dot" /> Live · updated {updatedAt}
-          </span>
-        </div>
-      </section>
-
-      <div className="v1-tabs">
-        <a
-          className={mainTab === "overview" ? "on" : undefined}
-          href={href({ name: "dashboard", tab: "overview" })}
-        >
-          <Icon name="dash" /> Overview
-        </a>
-        <a
-          className={mainTab === "summary" ? "on" : undefined}
-          href={href({ name: "dashboard", tab: "summary" })}
-        >
-          <Icon name="report" /> Observations &amp; Violations Summary
-        </a>
-      </div>
+    <section className={embedded ? "page v1-dash hw-moved-dash" : "page v1-dash"}>
+      {embedded ? null : (
+        <section className="v1-banner dash-hero">
+          <div className="v1-banner-icon">
+            <Icon name="shield" size={32} />
+          </div>
+          <div className="v1-banner-copy">
+            <h1>
+              SAFETY COMMAND CENTER <em>DASHBOARD {year}</em>
+            </h1>
+            <p>
+              Real-Time Monitoring <i>•</i> Smarter Decisions <i>•</i> Safer Operations
+            </p>
+          </div>
+          <div className="v1-banner-actions">
+            <span className="tagx green live">
+              <span className="dot" /> Live · updated {updatedAt}
+            </span>
+          </div>
+        </section>
+      )}
 
       <div className="v1-filters">
         <div className="grp">
@@ -2377,85 +2474,33 @@ export function DashboardScreen({
           <div className="v1-grid g4 v1-dash-pack">
             {[1, 2, 4, 5]
               .filter((i) => show(i) && !(device !== "All" && i === locIndex))
-              .map((i) => (
-                <LocCard
-                  key={DEVICE_TYPES[i]}
-                  title={`${DEVICE_TYPES[i]}${i === 5 ? "s" : ""} per ${view === "departments" ? "department" : "location"}`}
-                  index={i}
-                  rows={rows}
-                  totals={totals}
-                />
-              ))}
+              .map((i) =>
+                device === "All" && i === 4 ? (
+                  <div className="v1-loc-stack" key="wearables">
+                    <LocCard
+                      title={`Smartwatch per ${view === "departments" ? "department" : "location"}`}
+                      index={4}
+                      rows={rows}
+                      totals={totals}
+                    />
+                    <LocCard
+                      title={`Smart Helmets per ${view === "departments" ? "department" : "location"}`}
+                      index={3}
+                      rows={rows}
+                      totals={totals}
+                    />
+                  </div>
+                ) : (
+                  <LocCard
+                    key={DEVICE_TYPES[i]}
+                    title={`${DEVICE_TYPES[i]}${i === 5 ? "s" : ""} per ${view === "departments" ? "department" : "location"}`}
+                    index={i}
+                    rows={rows}
+                    totals={totals}
+                  />
+                ),
+              )}
           </div>
-
-          {device === "All" ? (
-            <div className="v1-grid g4 v1-dash-pack">
-              <LocCard
-                title={`Smart Helmets per ${view === "departments" ? "department" : "location"}`}
-                index={3}
-                rows={rows}
-                totals={totals}
-              />
-              <article className="v1-card span3">
-                <div className="hd">
-                  <h3>Needs attention</h3>
-                </div>
-                <p className="sub">What is waiting for someone right now</p>
-                <div className="v1-att-grid">
-                  {[
-                    {
-                      ic: "alert",
-                      n: odAll,
-                      text: `records are overdue for close-out (${odHigh} High risk)`,
-                      action: "Open",
-                      go: () =>
-                        document
-                          .querySelector<HTMLButtonElement>('[aria-label="Notifications"]')
-                          ?.click(),
-                    },
-                    {
-                      ic: "car",
-                      n: openConfirm,
-                      text: "Dashcam and Speed violations wait for Confirm Driver & Submit",
-                      action: "View",
-                      href: href({ name: "review" }),
-                    },
-                    {
-                      ic: "clock",
-                      n: underReview,
-                      text: "records wait for Admin review",
-                      action: "Review",
-                      href: href({ name: "review" }),
-                    },
-                    {
-                      ic: "watch",
-                      n: sosOpen,
-                      text: "SOS alerts are still open",
-                      action: "Open",
-                      href: href({ name: "list", type: "sos" }),
-                    },
-                  ].map((a) => (
-                    <div className="v1-att" key={a.text}>
-                      <span className="ic">
-                        <Icon name={a.ic} />
-                      </span>
-                      <b>{fmtN(a.n)}</b>
-                      <span className="txt">{a.text}</span>
-                      {a.href ? (
-                        <a className="linkbtn" href={a.href}>
-                          {a.action} →
-                        </a>
-                      ) : (
-                        <button className="linkbtn" type="button" onClick={a.go}>
-                          {a.action} →
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </article>
-            </div>
-          ) : null}
 
           <article className="v1-card">
             <div className="hd">
@@ -2682,6 +2727,14 @@ export function DashboardScreen({
               );
             })()}
           </div>
+
+          <NeedsAttention
+            odAll={odAll}
+            odHigh={odHigh}
+            openConfirm={openConfirm}
+            underReview={underReview}
+            sosOpen={sosOpen}
+          />
 
           <div className="v1-grid g3">
             <article className="v1-card">

@@ -251,8 +251,15 @@ const SPEED_LIMITS_KMH: Record<string, { publicRoad: number; row: number }> = {
 function permittedFromCategoryAndRoad(
   assetCategory: string,
   roadKind: string,
+  assetType = "",
 ): string {
-  const limits = SPEED_LIMITS_KMH[assetCategory.trim().toLowerCase()];
+  const category = assetCategory.trim().toLowerCase();
+  const type = assetType.trim().toLowerCase();
+  // Hiace Van is the only Light Vehicle type with an 80 km/h public-road limit.
+  if (category === "light vehicle" && type === "hiace van" && /public/i.test(roadKind)) {
+    return "80";
+  }
+  const limits = SPEED_LIMITS_KMH[category];
   if (!limits) return "";
   if (/row/i.test(roadKind)) return String(limits.row);
   if (/public/i.test(roadKind)) return String(limits.publicRoad);
@@ -1059,6 +1066,7 @@ function SpeedNewDrawer({
   const localTime = localNow.includes("T") ? localNow.split("T")[1]!.slice(0, 5) : "";
   const types = useList("speed_violation_type");
   const vehicles = useList("vehicle_type");
+  const models = useList("model");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
@@ -1075,7 +1083,6 @@ function SpeedNewDrawer({
     asset_number: "",
     driver_name: "",
     driver_badge_number: "",
-    position_id: "",
     rental_driver: false,
     iqama_number: "",
     location_coordinates: "",
@@ -1084,12 +1091,12 @@ function SpeedNewDrawer({
     permitted_speed_kmh: "",
     vehicle_speed_kmh: "",
   });
-  const positions = useList("driver_position");
 
   const kind =
     types.items.find((item) => item.id === form.speed_violation_type_id)?.label ?? "";
   const vehicle =
     vehicles.items.find((item) => item.id === form.vehicle_type_id)?.label ?? "";
+  const assetType = models.items.find((item) => item.id === form.model_id)?.label ?? "";
   const permitted = Number(form.permitted_speed_kmh);
   const recorded = Number(form.vehicle_speed_kmh);
   const speedsReady =
@@ -1107,7 +1114,7 @@ function SpeedNewDrawer({
           ? "Medium"
           : "High";
   const week = weekFromIsoDate(form.occurred_on);
-  const permittedAuto = permittedFromCategoryAndRoad(vehicle, kind);
+  const permittedAuto = permittedFromCategoryAndRoad(vehicle, kind, assetType);
 
   useEffect(() => {
     if (!open) return;
@@ -1160,7 +1167,6 @@ function SpeedNewDrawer({
     form.asset_number.trim(),
     form.driver_name.trim(),
     form.driver_badge_number.trim(),
-    form.position_id,
     form.rental_driver ? form.iqama_number.trim() : "ok",
     form.speed_violation_type_id,
     form.location_coordinates.trim(),
@@ -1193,8 +1199,6 @@ function SpeedNewDrawer({
         asset_number: form.asset_number,
         driver_name: form.driver_name,
         driver_badge_number: form.driver_badge_number,
-        position:
-          positions.items.find((item) => item.id === form.position_id)?.label || "",
         rental_driver: form.rental_driver,
         iqama_number: form.rental_driver ? form.iqama_number : null,
         location_coordinates: form.location_coordinates,
@@ -1354,17 +1358,6 @@ function SpeedNewDrawer({
                   </label>
                 </div>
                 <div className="fld">
-                  <SelectList
-                    label="Position"
-                    type="driver_position"
-                    value={form.position_id}
-                    onChange={(position_id) => setForm((c) => ({ ...c, position_id }))}
-                    required
-                    hideNotes
-                    hint="Driver's job position"
-                  />
-                </div>
-                <div className="fld">
                   <span className="field-label lbl">Rental driver</span>
                   <div className="radio-pills" role="radiogroup" aria-label="Rental driver">
                     {([false, true] as const).map((opt) => (
@@ -1509,9 +1502,12 @@ function SpeedNewDrawer({
                                   const category =
                                     vehicles.items.find((v) => v.id === c.vehicle_type_id)
                                       ?.label ?? "";
+                                  const typeLabel =
+                                    models.items.find((m) => m.id === c.model_id)?.label ?? "";
                                   const nextPermitted = permittedFromCategoryAndRoad(
                                     category,
                                     item.label,
+                                    typeLabel,
                                   );
                                   return {
                                     ...c,
@@ -1595,7 +1591,7 @@ function SpeedNewDrawer({
                       <span className="unit">km/h</span>
                     </span>
                     <span className="hint">
-                      Filled from Asset Category and Public Road / ROW limits
+                      Filled from Asset Category, Asset Type, and Public Road / ROW limits
                     </span>
                   </label>
                 </div>

@@ -82,7 +82,6 @@ class DashcamCreate(BaseModel):
     driver_badge_number: str = Field(..., min_length=1, max_length=80)
     rental_driver: bool = False
     iqama_number: str | None = None
-    location_coordinates: str = Field(..., min_length=1, max_length=80)
     occurred_on: date
     occurred_time: time
     violation_type_id: str
@@ -105,7 +104,6 @@ class SpeedCreate(BaseModel):
     asset_number: str = Field(..., min_length=1, max_length=80)
     driver_name: str = Field(..., min_length=1, max_length=120)
     driver_badge_number: str = Field(..., min_length=1, max_length=80)
-    position: str = Field(..., min_length=1, max_length=120)
     rental_driver: bool = False
     iqama_number: str | None = None
     location_coordinates: str = Field(..., min_length=1, max_length=80)
