@@ -4185,6 +4185,28 @@ html.theme-dark .login-card input:disabled {
 .page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-overall .v1-legend b.mono{
   font-size:10.5px;
 }
+/* Departments: every name, smaller type, same donut and card. */
+.page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-departments .v1-legend.col.is-dense{
+  gap:2px 8px;
+}
+.page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-departments .v1-legend-item{
+  grid-template-columns:7px minmax(0,1fr) 1.8rem;
+  column-gap:4px;
+  font-size:9px;
+  line-height:1.15;
+}
+.page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-departments .v1-legend i{
+  width:7px;
+  height:7px;
+}
+.page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-departments .v1-legend b.mono{
+  font-size:9px;
+}
+.page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-departments .v1-legend .v1-legend-label{
+  overflow:visible;
+  text-overflow:unset;
+  font-size:9px;
+}
 .page.v1-dash .v1-dash-pack.g3 .v1-donut-row.is-by-project{
   flex-direction:row;
   align-items:center;

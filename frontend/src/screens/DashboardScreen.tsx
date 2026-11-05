@@ -2315,7 +2315,7 @@ export function DashboardScreen({
                     ? "v1-donut-row is-by-project"
                     : view === "overall"
                       ? "v1-donut-row is-legend-below is-overall"
-                      : "v1-donut-row is-legend-below"
+                      : "v1-donut-row is-legend-below is-departments"
                 }
               >
                 <Donut
@@ -2329,9 +2329,9 @@ export function DashboardScreen({
                     view !== "projects" && projDonut.labels.length > 5 ? " is-dense" : ""
                   }`}
                 >
-                  {(view === "overall"
-                    ? projDonut.labels
-                    : projDonut.labels.slice(0, 12)
+                  {(view === "projects"
+                    ? projDonut.labels.slice(0, 12)
+                    : projDonut.labels
                   ).map((label, i) => (
                     <div className="v1-legend-item" key={label}>
                       <i style={{ background: DONUT_PAL[i % DONUT_PAL.length] }} />
