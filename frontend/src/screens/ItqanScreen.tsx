@@ -52,7 +52,7 @@ const ITQAN_STATUSES = [
   "Under HR Action",
   "Under Payroll",
   "Under Announcement",
-  "Closed",
+  "Finished",
 ] as const;
 
 const STATUS_COLORS: Record<string, string> = {
@@ -60,7 +60,7 @@ const STATUS_COLORS: Record<string, string> = {
   "Under HR Action": "#6b7280",
   "Under Payroll": "#d97706",
   "Under Announcement": "#a16207",
-  Closed: "#15803d",
+  Finished: "#15803d",
 };
 
 const PAL = {
@@ -186,7 +186,7 @@ function field(row: CaseSummary, key: string): string {
 }
 
 function itqStatus(row: CaseSummary) {
-  return field(row, "itqan_status") || (row.status === "closed" ? "Closed" : "Under Safety");
+  return field(row, "itqan_status") || (row.status === "closed" ? "Finished" : "Under Safety");
 }
 
 function scopeLabel(row: CaseSummary) {
@@ -208,7 +208,7 @@ function countBy(rows: CaseSummary[], keyFn: (r: CaseSummary) => string) {
 }
 
 function statusTagClass(status: string) {
-  if (status === "Closed") return " green";
+  if (status === "Finished") return " green";
   if (status === "Under Safety") return " red";
   if (status === "Under HR Action") return " amber";
   return "";
@@ -1397,7 +1397,7 @@ export function ItqanScreen({
           <KpiTile
             key={s}
             title={s}
-            icon={s === "Closed" ? "review" : "clock"}
+            icon={s === "Finished" ? "review" : "clock"}
             value={statusCounts.get(s) || 0}
             sub={`${pct(statusCounts.get(s) || 0, scoped.length)}% of violations`}
           />

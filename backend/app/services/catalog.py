@@ -135,7 +135,7 @@ LIST_SEEDS: dict[str, list[str]] = {
         "Under HR Action",
         "Under Payroll",
         "Under Announcement",
-        "Closed",
+        "Finished",
     ],
     "scc_device_type": [
         "AI Camera",

@@ -291,6 +291,7 @@ class PlatformStore:
             session.commit()
         self._migrate_sos_devices_split()
         self._migrate_hw_catalog_v1()
+        self._migrate_itqan_status_finished()
         self._seed_hw_inventory_v1()
         self._seed_hw_department_v1()
         self._seed_asset_classifications()
@@ -834,6 +835,48 @@ class PlatformStore:
             if changed:
                 session.commit()
 
+    def _migrate_itqan_status_finished(self) -> None:
+        """Rename the ITQAN status list value Closed to Finished, and stored records."""
+        with self._lock, self._sessions() as session:
+            finished = (
+                session.query(ListItemRow)
+                .filter(
+                    ListItemRow.list_type == "itqan_status",
+                    ListItemRow.label == "Finished",
+                )
+                .one_or_none()
+            )
+            closed = (
+                session.query(ListItemRow)
+                .filter(
+                    ListItemRow.list_type == "itqan_status",
+                    ListItemRow.label == "Closed",
+                )
+                .one_or_none()
+            )
+            changed = False
+            if closed is not None and finished is None:
+                closed.label = "Finished"
+                changed = True
+            elif closed is not None and finished is not None and closed.is_active:
+                closed.is_active = False
+                changed = True
+            rows = (
+                session.query(CaseRow)
+                .filter(CaseRow.record_type == "itqan")
+                .all()
+            )
+            for row in rows:
+                fields = dict(row.fields or {})
+                if fields.get("itqan_status") != "Closed":
+                    continue
+                fields["itqan_status"] = "Finished"
+                row.fields = fields
+                flag_modified(row, "fields")
+                changed = True
+            if changed:
+                session.commit()
+
     def _migrate_hw_catalog_v1(self) -> None:
         """Normalize legacy HW type labels and ensure V1 sites/types exist."""
         renames = {
@@ -1183,7 +1226,7 @@ class PlatformStore:
 
     @staticmethod
     def _case_status_for_itqan(itqan_status: str) -> str:
-        return "closed" if itqan_status == "Closed" else "under_process"
+        return "closed" if itqan_status in {"Finished", "Closed"} else "under_process"
 
     def _require_assign(self, payload) -> tuple[str | None, str | None]:
         if payload.assign_to == "project":
@@ -3679,7 +3722,7 @@ class PlatformStore:
             ("Under HR Action", 0.19),
             ("Under Payroll", 0.08),
             ("Under Announcement", 0.01),
-            ("Closed", 0.41),
+            ("Finished", 0.41),
         ]
         drivers = [
             ("Rajendrakumar Makwana", "81665"),
@@ -3713,8 +3756,8 @@ class PlatformStore:
                 if h2 < s_acc:
                     itqan_status = label
                     break
-            if index > 45 and itqan_status != "Closed" and index % 3 == 0:
-                itqan_status = "Closed"
+            if index > 45 and itqan_status != "Finished" and index % 3 == 0:
+                itqan_status = "Finished"
             project, department = scopes[index % len(scopes)]
             driver, badge = drivers[index % len(drivers)]
             vehicle = "Heavy Vehicle" if index % 2 == 0 else "Light Vehicle"
