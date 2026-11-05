@@ -995,6 +995,51 @@ function StackedWeekChart({
   );
 }
 
+function weekBucketsInRange(
+  cases: CaseSummary[],
+  startMs: number,
+  endMs: number,
+  max = 10,
+) {
+  const months = MON3;
+  const start = weekStart(new Date(startMs)).getTime();
+  const end = Math.max(startMs, endMs);
+  const weeks: Array<{ label: string; range: string; a: number; b: number }> = [];
+  for (let cursor = start; cursor <= end && weeks.length < 60; cursor += 7 * DAY_MS) {
+    const a = new Date(cursor);
+    const next = cursor + 7 * DAY_MS;
+    const weekNo =
+      Math.floor(
+        (Date.UTC(a.getFullYear(), a.getMonth(), a.getDate()) -
+          Date.UTC(a.getFullYear(), 0, 1)) /
+          86400000 /
+          7,
+      ) + 1;
+    weeks.push({
+      label: `W${weekNo}`,
+      range: `${a.getDate()} ${months[a.getMonth()]}`,
+      a: Math.max(cursor, startMs),
+      b: Math.min(next - 1, end),
+    });
+  }
+  const sliced = (weeks.length ? weeks : [{
+    label: "—",
+    range: "",
+    a: startMs,
+    b: end,
+  }]).slice(-max);
+  function countType(pred: (r: CaseSummary) => boolean) {
+    return sliced.map(
+      (w) =>
+        cases.filter((r) => {
+          const t = new Date(r.date).getTime();
+          return pred(r) && t >= w.a && t <= w.b;
+        }).length,
+    );
+  }
+  return { weeks: sliced, countType };
+}
+
 function weekBuckets(cases: CaseSummary[], count = 10) {
   const now = new Date();
   const start = new Date(now);
@@ -1709,8 +1754,14 @@ export function DashboardScreen({
   );
 
   const { weeks, countType } = useMemo(
-    () => weekBuckets(viewScoped.filter((r) => matchesDevice(r, device)), 10),
-    [viewScoped, device],
+    () =>
+      weekBucketsInRange(
+        periodCases.filter((r) => matchesDevice(r, device)),
+        range.a,
+        range.b,
+        10,
+      ),
+    [periodCases, device, range.a, range.b],
   );
 
   const weekSeries = useMemo(() => {
@@ -1802,7 +1853,6 @@ export function DashboardScreen({
     return { labels: entries.map((e) => e[0]), values: entries.map((e) => e[1]) };
   }, [rows, device]);
 
-  const compareWeeks = weeks.slice(-2);
   const compareRows = useMemo(() => {
     const series: Array<{ label: string; pred: (r: CaseSummary) => boolean; device: string }> = [
       { label: "AI Camera", pred: (r) => r.record_type === "ai_camera", device: "AI Camera" },
@@ -1811,7 +1861,8 @@ export function DashboardScreen({
       { label: "ROW", pred: (r) => isRow(r), device: "GPS" },
       { label: "SOS (wearables)", pred: (r) => r.record_type === "sos", device: "Smart Helmet" },
     ];
-    const pool = viewScoped.filter((r) => matchesDevice(r, device));
+    const current = periodCases.filter((r) => matchesDevice(r, device));
+    const previous = prevCases.filter((r) => matchesDevice(r, device));
     return series
       .filter(
         (s) =>
@@ -1820,19 +1871,13 @@ export function DashboardScreen({
           (device === "Smartwatch" && s.device === "Smart Helmet"),
       )
       .map((s) => {
-        const a = pool.filter((r) => {
-          const t = new Date(r.date).getTime();
-          return s.pred(r) && t >= (compareWeeks[0]?.a ?? 0) && t < (compareWeeks[0]?.b ?? 0);
-        }).length;
-        const b = pool.filter((r) => {
-          const t = new Date(r.date).getTime();
-          return s.pred(r) && t >= (compareWeeks[1]?.a ?? 0) && t < (compareWeeks[1]?.b ?? 0);
-        }).length;
+        const a = previous.filter(s.pred).length;
+        const b = current.filter(s.pred).length;
         const meta = deltaMeta(b, a);
         return { label: s.label, a, b, meta };
       })
       .filter((r) => device !== "All" || r.a + r.b > 0);
-  }, [viewScoped, device, compareWeeks]);
+  }, [periodCases, prevCases, device]);
 
   const openConfirm = viewScoped.filter(
     (r) => (r.record_type === "dashcam" || r.record_type === "speed") && r.status === "open",
@@ -2235,11 +2280,11 @@ export function DashboardScreen({
                     </span>
                     {d}
                   </div>
-                  <div className="v">{fmtN(totals[i])}</div>
+                  <div className="v">{fmtN(d === "Weather Station" ? totals[i] : n)}</div>
                   <div className="s">
                     {d === "Weather Station"
                       ? `devices deployed · ${fmtN(totals[i])} logging hourly`
-                      : `devices deployed · ${fmtN(n)} records`}
+                      : `${fmtN(totals[i])} devices deployed · records in this period`}
                   </div>
                 </button>
               );
@@ -2417,8 +2462,8 @@ export function DashboardScreen({
               <h3>Weekly progress: records registered, week by week</h3>
             </div>
             <p className="sub">
-              Last 10 weeks by record type, with the total and the change from the previous
-              week. Weeks start on Sunday.
+              {periodLabel}. Weeks inside this period, with the total and the change from the
+              previous week. Weeks start on Sunday.
             </p>
             <div className="v1-legend row">
               {weekSeries.map((s) => (
@@ -2437,7 +2482,11 @@ export function DashboardScreen({
 
           <article className="v1-card">
             <div className="hd">
-              <h3>This week compared with last week</h3>
+              <h3>
+                {range.cmp
+                  ? `This period compared with ${range.cmp}`
+                  : "Year to date compared with last year"}
+              </h3>
             </div>
             <p className="sub">Lower numbers of violations mean an improvement</p>
             <div className="tbl-wrap">
@@ -2445,12 +2494,8 @@ export function DashboardScreen({
                 <thead>
                   <tr>
                     <th>Record type</th>
-                    <th className="n">
-                      {compareWeeks[0]?.label} ({compareWeeks[0]?.range})
-                    </th>
-                    <th className="n">
-                      {compareWeeks[1]?.label} (to date)
-                    </th>
+                    <th className="n">{range.cmp ? `Previous (${range.cmp})` : "Same dates last year"}</th>
+                    <th className="n">This period</th>
                     <th className="n">Change</th>
                     <th>Trend</th>
                   </tr>
