@@ -642,7 +642,27 @@ export interface ReportPacket {
   b: string;
   generated_at?: string | null;
   signed?: { by: string; signature: string; at: string } | null;
-  issued?: { by: string; to: string; at: string } | null;
+  pm_signed?: { by: string; signature: string; at: string } | null;
+  issued?: {
+    by: string;
+    to: string;
+    email?: string;
+    at: string;
+    delivery?: {
+      mode?: string;
+      to?: string;
+      to_name?: string;
+      outbox_path?: string;
+      message?: string;
+    };
+  } | null;
+  delivery?: {
+    mode?: string;
+    to?: string;
+    to_name?: string;
+    outbox_path?: string;
+    message?: string;
+  };
 }
 
 export interface ReportsPayload {
@@ -653,17 +673,48 @@ export interface ReportsPayload {
   settings?: Record<string, unknown>;
 }
 
-export const signReport = (id: string, signature = "") =>
-  request<ReportPacket>(
-    `/api/v1/reports/${encodeURIComponent(id)}/sign?signature=${encodeURIComponent(signature)}`,
-    { method: "POST" },
-  );
+export const signReport = (id: string, signatureImage: string) =>
+  request<ReportPacket>(`/api/v1/reports/${encodeURIComponent(id)}/sign`, {
+    method: "POST",
+    body: JSON.stringify({ signature_image: signatureImage }),
+  });
 
-export const issueReport = (id: string, recipient = "Project PM") =>
-  request<ReportPacket>(
-    `/api/v1/reports/${encodeURIComponent(id)}/issue?recipient=${encodeURIComponent(recipient)}`,
-    { method: "POST" },
+export const issueReport = (
+  id: string,
+  options?: {
+    recipient?: string;
+    excel?: Blob;
+    excelFilename?: string;
+    pdf?: Blob;
+    pdfFilename?: string;
+  },
+) => {
+  const params = new URLSearchParams();
+  if (options?.recipient) params.set("recipient", options.recipient);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const hasFiles = Boolean(options?.excel || options?.pdf);
+  if (!hasFiles) {
+    return request<ReportPacket>(
+      `/api/v1/reports/${encodeURIComponent(id)}/issue${query}`,
+      { method: "POST" },
+    );
+  }
+  const body = new FormData();
+  if (options?.excel) {
+    body.append(
+      "excel",
+      options.excel,
+      options.excelFilename || `${id}.csv`,
+    );
+  }
+  if (options?.pdf) {
+    body.append("pdf", options.pdf, options.pdfFilename || `${id}.html`);
+  }
+  return request<ReportPacket>(
+    `/api/v1/reports/${encodeURIComponent(id)}/issue${query}`,
+    { method: "POST", body },
   );
+};
 
 export type OverdueNotificationItem = {
   id: string;

@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     storage_backend: str = "sqlite"
     database_url: str = ""
 
+    # Optional SMTP for monthly report issue emails. When SMTP_HOST is empty,
+    # attachments are written to backend/data/outbox/ instead.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_tls: bool = True
+
     @property
     def cors_origin_list(self) -> list[str]:
         origins = [item.strip() for item in self.cors_origins.split(",") if item.strip()]

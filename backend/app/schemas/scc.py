@@ -168,6 +168,12 @@ class ItqanStatusUpdate(BaseModel):
     itqan_status_id: str
 
 
+class ReportSignIn(BaseModel):
+    """Dept HSE weekly sign-off — digital signature image URL from /uploads."""
+
+    signature_image: str = Field(..., min_length=1, max_length=500)
+
+
 class ContactCreate(BaseModel):
     project_id: str
     category: str

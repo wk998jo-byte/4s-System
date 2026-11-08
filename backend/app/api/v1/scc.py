@@ -26,6 +26,7 @@ from app.schemas.scc import (
     SosClose,
     SosCreate,
     SpeedCreate,
+    ReportSignIn,
     WeatherHourlySaveIn,
     WeatherSheetIn,
     WeatherWeeklySubmitIn,
@@ -837,16 +838,33 @@ def get_reports(user: UserOut = Depends(get_current_user)):
 @router.post("/reports/{report_id}/sign")
 def sign_report(
     report_id: str,
+    body: ReportSignIn,
     user: UserOut = Depends(get_current_user),
-    signature: str = Query("", max_length=200),
 ):
-    if not user.capabilities.get("sign_reports") or user.role != "dept_hse":
-        raise HTTPException(status_code=403, detail="Signing weekly reports requires the Dept HSE role.")
+    packet = platform_store.get_report_packet(report_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    kind = packet.get("kind")
+    if kind == "weekly":
+        if not user.capabilities.get("sign_reports") or user.role != "dept_hse":
+            raise HTTPException(
+                status_code=403,
+                detail="Signing weekly reports requires the Dept HSE role.",
+            )
+    elif kind == "monthly":
+        if not user.capabilities.get("sign_monthly_reports") or user.role != "receiver":
+            raise HTTPException(
+                status_code=403,
+                detail="Signing monthly reports requires the Project PM role.",
+            )
+    else:
+        raise HTTPException(status_code=400, detail="This report type cannot be signed.")
     try:
         item = platform_store.sign_report(
             report_id,
             actor=actor_label(user),
-            signature=signature or actor_label(user),
+            signature=body.signature_image.strip(),
+            role=user.role,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Report not found.") from None
@@ -857,35 +875,52 @@ def sign_report(
         actor_name=actor_label(user),
         action="report_signed",
         category="reports",
-        summary=f"Signed weekly report {report_id}",
-        details={"report_id": report_id, "scope": item.get("scope")},
+        summary=(
+            f"Signed {'weekly' if kind == 'weekly' else 'monthly'} report {report_id}"
+        ),
+        details={"report_id": report_id, "scope": item.get("scope"), "kind": kind},
     )
     return item
 
 
 @router.post("/reports/{report_id}/issue")
-def issue_report(
+async def issue_report(
     report_id: str,
-    user: UserOut = Depends(require_admin),
-    recipient: str = Query("Project PM", max_length=200),
+    user: UserOut = Depends(require_capability("issue_reports")),
+    recipient: str | None = Query(None, max_length=200),
+    excel: UploadFile | None = File(None),
+    pdf: UploadFile | None = File(None),
 ):
+    excel_bytes = await excel.read() if excel is not None else None
+    pdf_bytes = await pdf.read() if pdf is not None else None
     try:
         item = platform_store.issue_report(
             report_id,
             actor=actor_label(user),
             recipient=recipient,
+            excel_bytes=excel_bytes or None,
+            excel_filename=excel.filename if excel is not None else None,
+            pdf_bytes=pdf_bytes or None,
+            pdf_filename=pdf.filename if pdf is not None else None,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Report not found.") from None
     except ValueError as exc:
         _http_value_error(exc)
+    delivery = item.get("delivery") or {}
     platform_store.record_audit(
         actor_user_id=user.id,
         actor_name=actor_label(user),
         action="report_issued",
         category="reports",
         summary=f"Issued monthly report {report_id}",
-        details={"report_id": report_id, "recipient": recipient},
+        details={
+            "report_id": report_id,
+            "recipient": (item.get("issued") or {}).get("to"),
+            "email": (item.get("issued") or {}).get("email"),
+            "delivery_mode": delivery.get("mode"),
+            "pdf_filename": pdf.filename if pdf is not None else None,
+        },
     )
     return item
 

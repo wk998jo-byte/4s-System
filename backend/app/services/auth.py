@@ -66,6 +66,20 @@ PERMISSION_MATRIX = [
         "receiver": False,
     },
     {
+        "capability": "Sign monthly reports",
+        "operator": False,
+        "admin": False,
+        "dept_hse": False,
+        "receiver": True,
+    },
+    {
+        "capability": "Issue monthly reports",
+        "operator": False,
+        "admin": True,
+        "dept_hse": False,
+        "receiver": False,
+    },
+    {
         "capability": "Receive monthly reports",
         "operator": False,
         "admin": False,
@@ -173,6 +187,8 @@ def capabilities(role: str) -> dict[str, bool]:
         "manage_lists": admin,
         "view_kpi": admin,
         "sign_reports": dept_hse,
+        # Project PM signs monthly packets (upload signature → Ready to issue).
+        "sign_monthly_reports": receiver,
         "issue_reports": admin,
         "manage_settings": admin,
     }

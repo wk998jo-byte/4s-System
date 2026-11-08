@@ -125,6 +125,7 @@ def test_dept_hse_is_view_and_sign_only() -> None:
     caps = login["user"]["capabilities"]
     assert login["user"]["role"] == "dept_hse"
     assert caps["sign_reports"] is True
+    assert caps["sign_monthly_reports"] is False
     assert caps["register"] is False
     assert caps["close_out"] is False
     assert caps["confirm_driver"] is False

@@ -6,6 +6,7 @@ backend/.env
 backend/data/*.db
 backend/data/*.db-journal
 backend/data/uploads/
+backend/data/outbox/
 frontend/node_modules/
 frontend/dist/
 frontend/.env

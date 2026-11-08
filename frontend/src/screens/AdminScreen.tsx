@@ -559,8 +559,25 @@ export function AdminScreen() {
       10,
       Math.max(1, Number(settings.monthlyDay ?? 1) || 1),
     );
+    const reportTestEmail = String(settings.reportTestEmail ?? "").trim();
+    const rawDist = (settings.reportDistribution as Record<string, { name?: string; email?: string }>) || {};
+    const reportDistribution: Record<string, { name: string; email: string }> = {};
+    for (const p of ADMIN_PROJECTS) {
+      const entry = rawDist[p] || {};
+      reportDistribution[p] = {
+        name: String(entry.name || ADMIN_PMS[p] || `[PM name], ${p} Project`).trim(),
+        email: String(entry.email || "").trim(),
+      };
+    }
     await persistSettings(
-      { ...settings, dailyAt, weeklyDay, monthlyDay },
+      {
+        ...settings,
+        dailyAt,
+        weeklyDay,
+        monthlyDay,
+        reportTestEmail,
+        reportDistribution,
+      },
       `Report schedule saved · daily at ${dailyAt}`,
     );
   }
@@ -1402,7 +1419,7 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  After every weekly report of the month is signed by Dept HSE
+                  Month becomes Awaiting PM signature on this day of the next month
                 </span>
               </label>
               <button
@@ -1432,15 +1449,76 @@ export function AdminScreen() {
                 </select>
                 <span className="hint">Weeks run Sunday to Saturday</span>
               </label>
+              <label className="fld">
+                Test email override
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={String(settings.reportTestEmail ?? "")}
+                  onChange={(event) =>
+                    setSettings({
+                      ...settings,
+                      reportTestEmail: event.target.value,
+                    })
+                  }
+                />
+                <span className="hint">
+                  When set, every Issue sends here instead of the project PM email
+                  (useful while real PM addresses are still missing)
+                </span>
+              </label>
               <div className="fld">
-                <span className="adm-dist-label">Distribution</span>
-                <div className="adm-kv">
-                  {ADMIN_PROJECTS.map((p) => (
-                    <div key={p}>
-                      <span>{p}</span>
-                      <b>{ADMIN_PMS[p]}</b>
-                    </div>
-                  ))}
+                <span className="adm-dist-label">Distribution · Project PM</span>
+                <div className="adm-dist-list">
+                  {ADMIN_PROJECTS.map((p) => {
+                    const dist =
+                      (settings.reportDistribution as Record<
+                        string,
+                        { name?: string; email?: string }
+                      >) || {};
+                    const entry = dist[p] || {};
+                    return (
+                      <div key={p} className="adm-dist-row">
+                        <span className="adm-dist-project">{p}</span>
+                        <input
+                          type="text"
+                          aria-label={`${p} PM name`}
+                          placeholder={ADMIN_PMS[p]}
+                          value={String(entry.name ?? ADMIN_PMS[p] ?? "")}
+                          onChange={(event) =>
+                            setSettings({
+                              ...settings,
+                              reportDistribution: {
+                                ...dist,
+                                [p]: {
+                                  name: event.target.value,
+                                  email: String(entry.email || ""),
+                                },
+                              },
+                            })
+                          }
+                        />
+                        <input
+                          type="email"
+                          aria-label={`${p} PM email`}
+                          placeholder="pm@example.com"
+                          value={String(entry.email ?? "")}
+                          onChange={(event) =>
+                            setSettings({
+                              ...settings,
+                              reportDistribution: {
+                                ...dist,
+                                [p]: {
+                                  name: String(entry.name || ADMIN_PMS[p] || ""),
+                                  email: event.target.value,
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

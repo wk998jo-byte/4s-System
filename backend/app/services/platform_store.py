@@ -3187,6 +3187,21 @@ class PlatformStore:
             "dailyAt": "23:59",
             "weeklyDay": "Saturday",
             "monthlyDay": 1,
+            # Editable in Administration → Report schedule. Test email overrides
+            # every project's PM inbox so you can verify delivery on one address.
+            "reportTestEmail": "",
+            "reportDistribution": {
+                "Jafurah": {
+                    "name": "[PM name], Jafurah Project",
+                    "email": "",
+                },
+                "MGS": {"name": "[PM name], MGS Project", "email": ""},
+                "Yanbu": {"name": "[PM name], Yanbu Project", "email": ""},
+                "Ras Tanura": {
+                    "name": "[PM name], Ras Tanura Project",
+                    "email": "",
+                },
+            },
         }
 
     def _ensure_sla_deadlines(self) -> None:
@@ -3910,6 +3925,18 @@ class PlatformStore:
                         **self._default_platform_settings()["sla"],
                         **row.value["sla"],
                     }
+                if isinstance(row.value.get("reportDistribution"), dict):
+                    defaults = self._default_platform_settings()["reportDistribution"]
+                    dist = dict(defaults)
+                    for project, entry in row.value["reportDistribution"].items():
+                        if not isinstance(entry, dict):
+                            continue
+                        prev = dict(dist.get(project) or {})
+                        dist[str(project)] = {
+                            "name": str(entry.get("name") or prev.get("name") or ""),
+                            "email": str(entry.get("email") or prev.get("email") or "").strip(),
+                        }
+                    merged["reportDistribution"] = dist
             return merged
 
     def save_platform_settings(self, payload: dict) -> dict:
@@ -3917,6 +3944,21 @@ class PlatformStore:
         next_value = {**current, **(payload or {})}
         if isinstance(payload.get("sla"), dict):
             next_value["sla"] = {**current.get("sla", {}), **payload["sla"]}
+        if isinstance(payload.get("reportDistribution"), dict):
+            merged_dist = dict(current.get("reportDistribution") or {})
+            for project, entry in payload["reportDistribution"].items():
+                if not isinstance(entry, dict):
+                    continue
+                prev = dict(merged_dist.get(project) or {})
+                merged_dist[str(project)] = {
+                    "name": str(entry.get("name") if entry.get("name") is not None else prev.get("name") or ""),
+                    "email": str(
+                        entry.get("email") if entry.get("email") is not None else prev.get("email") or ""
+                    ).strip(),
+                }
+            next_value["reportDistribution"] = merged_dist
+        if "reportTestEmail" in (payload or {}):
+            next_value["reportTestEmail"] = str(payload.get("reportTestEmail") or "").strip()
         with self._lock, self._sessions() as session:
             row = session.get(AppStateRow, "platform_settings")
             if row:
@@ -4153,8 +4195,9 @@ class PlatformStore:
     ) -> list[dict]:
         """One monthly packet per project × recent month, even with 0 cases.
 
-        A month becomes Ready to issue on Administration monthlyDay of the
-        following month (00:00 local). Until then it stays Compiling.
+        After Administration monthlyDay of the following month the packet moves
+        Compiling → Awaiting PM signature. Project PM signature advances it to
+        Ready to issue; Admin Issue marks Issued.
         """
         settings = self.get_platform_settings()
         monthly_day = min(10, max(1, int(settings.get("monthlyDay") or 1)))
@@ -4195,15 +4238,17 @@ class PlatformStore:
                     or {}
                 )
                 issued = prev.get("issued")
-                if issued or str(prev.get("status") or "") == "Issued":
-                    status = "Issued"
-                elif finalized:
-                    status = "Ready to issue"
-                else:
+                pm_signed = prev.get("pm_signed")
+                # Current / not-yet-due months stay Compiling. Sticky "Issued"
+                # from earlier bad data must not mark November as issued on Nov 8.
+                if not finalized:
                     status = "Compiling"
-                generated_at = None
-                if finalized:
-                    generated_at = datetime(
+                    issued = None
+                    pm_signed = None
+                    generated_at = None
+                elif issued or str(prev.get("status") or "") == "Issued":
+                    status = "Issued"
+                    generated_at = prev.get("generated_at") or datetime(
                         ready_on.year,
                         ready_on.month,
                         ready_on.day,
@@ -4211,9 +4256,28 @@ class PlatformStore:
                         0,
                         tzinfo=AST,
                     ).isoformat()
-                # Issued stays issued; otherwise follow monthlyDay even with 0 cases.
-                if issued or str(prev.get("status") or "") == "Issued":
-                    status = "Issued"
+                elif pm_signed:
+                    status = "Ready to issue"
+                    generated_at = prev.get("generated_at") or datetime(
+                        ready_on.year,
+                        ready_on.month,
+                        ready_on.day,
+                        0,
+                        0,
+                        tzinfo=AST,
+                    ).isoformat()
+                else:
+                    # Finalized months wait for Project PM signature (do not
+                    # sticky-keep a prior "Ready to issue" without pm_signed).
+                    status = "Awaiting PM signature"
+                    generated_at = prev.get("generated_at") or datetime(
+                        ready_on.year,
+                        ready_on.month,
+                        ready_on.day,
+                        0,
+                        0,
+                        tzinfo=AST,
+                    ).isoformat()
                 item = {
                     "id": report_id,
                     "kind": "monthly",
@@ -4223,8 +4287,9 @@ class PlatformStore:
                     "a": a,
                     "b": b,
                     "signed": prev.get("signed"),
+                    "pm_signed": pm_signed,
                     "issued": issued,
-                    "generated_at": prev.get("generated_at") or generated_at,
+                    "generated_at": generated_at,
                 }
                 rebuilt.append(item)
         return rebuilt
@@ -4238,36 +4303,219 @@ class PlatformStore:
                 session.add(AppStateRow(key="report_packets", value=packets))
             session.commit()
 
-    def sign_report(self, report_id: str, *, actor: str, signature: str) -> dict:
+    def get_report_packet(self, report_id: str) -> dict | None:
+        for item in self._report_packets():
+            if item.get("id") == report_id:
+                return dict(item)
+        return None
+
+    def resolve_monthly_distribution(self, scope: str) -> dict:
+        """Return {name, email} for a project's monthly distribution (test override wins)."""
+        settings = self.get_platform_settings()
+        dist = settings.get("reportDistribution") or {}
+        entry = dist.get(scope) if isinstance(dist, dict) else None
+        if not isinstance(entry, dict):
+            entry = {}
+        name = str(entry.get("name") or f"[PM name], {scope} Project").strip()
+        email = str(entry.get("email") or "").strip()
+        test = str(settings.get("reportTestEmail") or "").strip()
+        if test:
+            email = test
+        return {"name": name, "email": email, "test_override": bool(test)}
+
+    def sign_report(self, report_id: str, *, actor: str, signature: str, role: str) -> dict:
         packets = self._report_packets()
+        sig = (signature or "").strip()
+        if not sig:
+            raise ValueError("A digital signature image is required to sign the report.")
         for item in packets:
             if item.get("id") == report_id:
-                if item.get("kind") != "weekly":
-                    raise ValueError("Only weekly reports can be signed by Dept HSE.")
-                item["signed"] = {
-                    "by": actor,
-                    "signature": signature,
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-                item["status"] = "Signed"
-                self._save_report_packets(packets)
-                return item
+                kind = item.get("kind")
+                if kind == "weekly":
+                    if role != "dept_hse":
+                        raise ValueError("Only Dept HSE can sign weekly reports.")
+                    if item.get("signed"):
+                        raise ValueError("This weekly report is already signed.")
+                    item["signed"] = {
+                        "by": actor,
+                        "signature": sig,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    item["status"] = "Signed"
+                    self._save_report_packets(packets)
+                    return item
+                if kind == "monthly":
+                    if role != "receiver":
+                        raise ValueError("Only Project PM can sign monthly reports.")
+                    if str(item.get("status") or "") == "Compiling":
+                        raise ValueError(
+                            "This monthly report is still compiling and cannot be signed yet."
+                        )
+                    if item.get("issued") or str(item.get("status") or "") == "Issued":
+                        raise ValueError("This monthly report is already issued.")
+                    if item.get("pm_signed"):
+                        raise ValueError("This monthly report is already signed by Project PM.")
+                    item["pm_signed"] = {
+                        "by": actor,
+                        "signature": sig,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    item["status"] = "Ready to issue"
+                    self._save_report_packets(packets)
+                    return item
+                raise ValueError("This report type cannot be signed.")
         raise KeyError(report_id)
 
-    def issue_report(self, report_id: str, *, actor: str, recipient: str) -> dict:
+    def _build_monthly_excel_csv(self, item: dict) -> bytes:
+        scope = str(item.get("scope") or "")
+        a = str(item.get("a") or "")
+        b = str(item.get("b") or "")
+        rows = [
+            row
+            for row in self.list_cases()
+            if (not scope or row.get("project") == scope)
+            and a
+            and b
+            and a <= str(row.get("date") or "") <= b
+        ]
+        rows.sort(
+            key=lambda r: f"{r.get('date') or ''}{r.get('created_at') or ''}",
+            reverse=True,
+        )
+        lines = ['"Case ID","Date","Type","Scope","Risk","Status"']
+
+        def esc(value: object) -> str:
+            text = str(value or "")
+            if any(ch in text for ch in '",\n'):
+                return '"' + text.replace('"', '""') + '"'
+            return text
+
+        for row in rows:
+            created = str(row.get("created_at") or "")
+            time_part = created[11:16] if "T" in created else ""
+            day = str(row.get("date") or "")
+            date_cell = f"{day} {time_part}".strip() if time_part else day
+            risk = row.get("risk_level") or "—"
+            if row.get("record_type") == "sos":
+                risk = "NA"
+            lines.append(
+                ",".join(
+                    [
+                        esc(row.get("case_id")),
+                        esc(date_cell),
+                        esc(row.get("record_type")),
+                        esc(row.get("project") or scope),
+                        esc(risk),
+                        esc(row.get("status")),
+                    ]
+                )
+            )
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
+    def _build_monthly_pdf_report(self, item: dict) -> bytes:
+        """Build a PDF that mirrors the on-screen monthly report (fast, server-side)."""
+        from app.services.monthly_report_pdf import build_monthly_report_pdf
+
+        scope = str(item.get("scope") or "")
+        a = str(item.get("a") or "")
+        b = str(item.get("b") or "")
+        rows = [
+            row
+            for row in self.list_cases()
+            if (not scope or row.get("project") == scope)
+            and a
+            and b
+            and a <= str(row.get("date") or "") <= b
+        ]
+        rows.sort(
+            key=lambda r: f"{r.get('date') or ''}{r.get('created_at') or ''}",
+            reverse=True,
+        )
+        dist = self.resolve_monthly_distribution(scope)
+        return build_monthly_report_pdf(
+            item=item,
+            rows=rows,
+            distribution_name=str(dist.get("name") or ""),
+        )
+
+    def issue_report(
+        self,
+        report_id: str,
+        *,
+        actor: str,
+        recipient: str | None = None,
+        excel_bytes: bytes | None = None,
+        excel_filename: str | None = None,
+        pdf_bytes: bytes | None = None,
+        pdf_filename: str | None = None,
+    ) -> dict:
+        from app.services.report_mail import send_report_email
+
         packets = self._report_packets()
         for item in packets:
             if item.get("id") == report_id:
                 if item.get("kind") != "monthly":
                     raise ValueError("Only monthly reports can be issued to Project PM.")
+                status = str(item.get("status") or "")
+                if status == "Compiling":
+                    raise ValueError(
+                        "This monthly report is still compiling and cannot be issued yet."
+                    )
+                if status == "Awaiting PM signature" or (
+                    not item.get("pm_signed") and status != "Ready to issue" and status != "Issued"
+                ):
+                    raise ValueError(
+                        "Project PM must sign this monthly report before it can be issued."
+                    )
+                if item.get("issued") or status == "Issued":
+                    raise ValueError("This monthly report is already issued.")
+                if status != "Ready to issue" and not item.get("pm_signed"):
+                    raise ValueError(
+                        "This monthly report is not ready to issue yet."
+                    )
+
+                dist = self.resolve_monthly_distribution(str(item.get("scope") or ""))
+                to_name = (recipient or "").strip() or dist["name"]
+                to_email = dist["email"]
+
+                excel = excel_bytes or self._build_monthly_excel_csv(item)
+                pdf = pdf_bytes or self._build_monthly_pdf_report(item)
+                excel_name = excel_filename or f"{report_id}.csv"
+                pdf_name = pdf_filename or f"{report_id}.pdf"
+                pdf_mime = "application/pdf"
+
+                subject = f"SCC Monthly Report · {item.get('scope')} · {item.get('label')}"
+                body = (
+                    f"Please find the monthly SCC report for {item.get('scope')} "
+                    f"({item.get('label')}).\n\n"
+                    f"Report ID: {report_id}\n"
+                    f"Issued by: {actor}\n"
+                    f"Signed by Project PM: {(item.get('pm_signed') or {}).get('by') or '—'}\n\n"
+                    "Attachments: Excel/CSV export and PDF report.\n"
+                )
+                delivery = send_report_email(
+                    to_email=to_email,
+                    to_name=to_name,
+                    subject=subject,
+                    body=body,
+                    attachments=[
+                        (excel_name, excel, "text/csv"),
+                        (pdf_name, pdf, pdf_mime),
+                    ],
+                )
+
                 item["issued"] = {
                     "by": actor,
-                    "to": recipient,
+                    "to": to_name,
+                    "email": to_email,
                     "at": datetime.now(timezone.utc).isoformat(),
+                    "delivery": delivery,
                 }
                 item["status"] = "Issued"
                 self._save_report_packets(packets)
-                return item
+                result = dict(item)
+                result["delivery"] = delivery
+                return result
         raise KeyError(report_id)
 
     def _closeout_deadline_pending(self, row: dict) -> bool:

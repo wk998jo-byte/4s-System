@@ -7,7 +7,9 @@ import {
   fetchWeatherWeeklyPreview,
   issueReport,
   openNotificationsPanel,
+  resolveMediaUrl,
   signReport,
+  uploadImage,
   type CaseSummary,
   type ReportPacket,
   type ReportsPayload,
@@ -16,6 +18,7 @@ import {
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
+import { printReportRoot } from "../lib/reportPrint";
 import { useProjectAccess } from "../lib/useProjectAccess";
 import { formatUserLabel } from "./shared";
 import {
@@ -489,8 +492,13 @@ function summarizeScoped(
   const rows = casesInScope(cases, scope, fromIso, toIso);
   const packetStatus = packet?.status || "";
   // Do not use /sign/ here — it also matches "Signed".
-  const signed = Boolean(packet?.signed) || /^signed$/i.test(packetStatus);
-  const awaiting = /awaiting/i.test(packetStatus) && !signed;
+  const signed =
+    kind === "monthly"
+      ? Boolean(packet?.pm_signed)
+      : Boolean(packet?.signed) || /^signed$/i.test(packetStatus);
+  const awaiting =
+    /awaiting/i.test(packetStatus) &&
+    !(kind === "monthly" ? packet?.pm_signed : packet?.signed || /^signed$/i.test(packetStatus));
   const ready = /ready/i.test(packetStatus);
   const issued = /issued/i.test(packetStatus);
   const compiling = /progress|compil/i.test(packetStatus);
@@ -515,16 +523,12 @@ function summarizeScoped(
     generatedLabel: compiling
       ? "In progress"
       : kind === "weekly"
-        ? packet?.signed?.at
-          ? `${formatDay(packet.signed.at)} · signed`
-          : packet?.generated_at
-            ? `${formatDay(packet.generated_at)} · auto`
-            : `${formatDay(toIso)}, 23:59 · auto`
-        : packet?.issued?.at
-          ? `${formatDay(packet.issued.at)}, 00:00 · auto`
-          : packet?.generated_at
-            ? `${formatDay(packet.generated_at)} · auto`
-            : `${formatDay(fromIso)}, 00:00 · auto`,
+        ? packet?.generated_at
+          ? `${formatDay(packet.generated_at)} · auto`
+          : `${formatDay(toIso)}, 23:59 · auto`
+        : packet?.generated_at
+          ? `${formatDay(packet.generated_at)} · auto`
+          : `${formatDay(fromIso)}, 00:00 · auto`,
     status:
       packet?.status === "Issued"
         ? "Issued to PM"
@@ -874,21 +878,90 @@ function WeatherLogViewer({
   return createPortal(ui, document.body);
 }
 
+function isSignatureImage(value: string | null | undefined): boolean {
+  const v = (value || "").trim();
+  if (!v) return false;
+  return (
+    v.startsWith("/uploads/") ||
+    v.startsWith("data:image") ||
+    v.startsWith("blob:") ||
+    /^https?:\/\//i.test(v) ||
+    /\.(png|jpe?g|gif|webp|bmp)$/i.test(v)
+  );
+}
+
 function ReportViewer({
   report,
   weatherLog,
   dailyWeather,
   dailyWeatherLoaded,
   monthlyWeather,
+  signMode = false,
   onClose,
+  onSigned,
 }: {
   report: BuiltReport;
   weatherLog: WeeklyWeatherLog | null;
   dailyWeather: DailyStationWeather[];
   dailyWeatherLoaded: boolean;
   monthlyWeather: MonthlyStationWeatherMax[];
+  signMode?: boolean;
   onClose: () => void;
+  onSigned?: (packet: ReportPacket) => void;
 }) {
+  const { user } = useAuth();
+  const [sigFile, setSigFile] = useState<File | null>(null);
+  const [sigPreview, setSigPreview] = useState<string | null>(null);
+  const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!sigFile) {
+      setSigPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(sigFile);
+    setSigPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [sigFile]);
+
+  const canSignWeekly =
+    signMode &&
+    report.kind === "weekly" &&
+    !report.packet?.signed &&
+    user?.role === "dept_hse" &&
+    Boolean(user.capabilities.sign_reports);
+  const canSignMonthly =
+    signMode &&
+    report.kind === "monthly" &&
+    !report.packet?.pm_signed &&
+    !report.packet?.issued &&
+    /awaiting/i.test(report.status) &&
+    user?.role === "receiver" &&
+    Boolean(user.capabilities.sign_monthly_reports);
+  const canSignHere = canSignWeekly || canSignMonthly;
+
+  async function submitSignature() {
+    if (!canSignHere || !sigFile || signing) return;
+    setSigning(true);
+    setSignError(null);
+    try {
+      const uploaded = await uploadImage(sigFile);
+      const packet = await signReport(report.id, uploaded.url);
+      onSigned?.(packet);
+    } catch (err) {
+      setSignError(errorMessage(err));
+    } finally {
+      setSigning(false);
+    }
+  }
+
+  const weeklySignedImageUrl = isSignatureImage(report.packet?.signed?.signature)
+    ? resolveMediaUrl(report.packet?.signed?.signature)
+    : null;
+  const pmSignedImageUrl = isSignatureImage(report.packet?.pm_signed?.signature)
+    ? resolveMediaUrl(report.packet?.pm_signed?.signature)
+    : null;
   const title =
     report.kind === "daily"
       ? "SCC Daily Report"
@@ -958,82 +1031,7 @@ function ReportViewer({
   function exportPdf() {
     const node = document.getElementById("report-print-root");
     if (!node) return;
-    const logoSrc = bqLogo.startsWith("http")
-      ? bqLogo
-      : `${window.location.origin}${bqLogo.startsWith("/") ? "" : "/"}${bqLogo}`;
-    const bodyHtml = node.innerHTML.replace(
-      /src="[^"]*bq-logo[^"]*"|src="[^"]*bq_logo[^"]*"/gi,
-      `src="${logoSrc}"`,
-    ).replace(
-      new RegExp(`src="${bqLogo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g"),
-      `src="${logoSrc}"`,
-    );
-    // Ensure any relative vite asset path becomes absolute for the print iframe.
-    const absoluteBody = bodyHtml.replace(
-      /src="(\/assets\/[^"]+)"/g,
-      `src="${window.location.origin}$1"`,
-    );
-    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${report.id}</title>
-      <style>
-        @page{margin:14mm}
-        body{font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;margin:20px;background:#fff}
-        h1{font-size:26px;margin:0;font-weight:800}
-        h3, .report-sec{font-size:13px;margin:20px 0 8px;color:#C8102E;text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid #C8102E;padding-bottom:4px;font-weight:800}
-        .sub{color:#666;font-size:12.5px;margin:6px 0 0}
-        .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:0;padding-bottom:12px;border-bottom:2px solid #C8102E}
-        .report-doc-brand{display:flex;align-items:flex-start;gap:14px;min-width:0}
-        .report-doc-logo{height:52px;width:auto;display:block;object-fit:contain}
-        .report-doc-meta{text-align:right;font-size:11.5px;color:#888;line-height:1.55;font-family:ui-monospace,Consolas,monospace}
-        .report-meta-band{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin:0 0 18px;padding:12px 0;border-bottom:2px solid #C8102E;font-size:12px;color:#888}
-        .report-meta-band span{display:block;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
-        .report-meta-band b{display:block;margin-top:3px;color:#111;font-size:13.5px;font-weight:700}
-        .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0 18px}
-        .kpi{border:1px solid #ddd;border-radius:10px;padding:12px 14px;background:#fff;text-align:left}
-        .kpi span{display:block;font-size:11px;color:#888;font-weight:600}
-        .kpi b{display:block;margin-top:6px;font-size:28px;font-weight:800;line-height:1}
-        .report-table{width:100%;border-collapse:collapse;font-size:12.5px;margin:4px 0 16px}
-        .report-table th{background:transparent;color:#888;text-align:left;padding:8px 6px;font-size:11px;font-weight:700;font-family:ui-monospace,Consolas,monospace;border-bottom:1px solid #ddd;text-transform:none;letter-spacing:0}
-        .report-table td{padding:9px 6px;border-bottom:1px solid #e8e8e8;vertical-align:top}
-        .report-table .num,.report-table th.num{text-align:right;font-family:ui-monospace,Consolas,monospace;color:#555}
-        .report-table td:first-child{color:#111;font-family:Segoe UI,Arial,sans-serif}
-        .mono{font-family:ui-monospace,Consolas,monospace}
-        .report-signoff{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:22px}
-        .report-signoff-card{border:1px solid #ddd;border-radius:12px;padding:14px 16px;min-height:108px}
-        .report-signoff-card > span{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:#888;margin-bottom:10px}
-        .report-signoff-card p{margin:0 0 4px;font-size:13.5px}
-        .report-signoff-card b{display:block;font-size:15px;font-weight:800;line-height:1.25}
-        .report-signoff-card b.muted-strong{color:#555;font-weight:700}
-        .report-signoff-card small{display:block;margin-top:8px;color:#888;font-size:12px}
-        .report-truncation-note{margin:8px 0 0;font-size:11.5px;color:#888;line-height:1.4}
-      </style></head><body>${absoluteBody}</body></html>`;
-
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const frame = document.createElement("iframe");
-    frame.setAttribute("title", `Print ${report.id}`);
-    frame.style.cssText =
-      "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none";
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      frame.remove();
-    };
-    frame.onload = () => {
-      const win = frame.contentWindow;
-      if (!win) {
-        cleanup();
-        return;
-      }
-      window.setTimeout(() => {
-        try {
-          win.focus();
-          win.print();
-        } finally {
-          window.setTimeout(cleanup, 1500);
-        }
-      }, 100);
-    };
-    frame.src = url;
-    document.body.appendChild(frame);
+    printReportRoot(node, report.id);
   }
 
   const ui = (
@@ -1443,10 +1441,21 @@ function ReportViewer({
                 <small>—</small>
               </div>
               <div className="report-signoff-card">
-                <span>Reviewed &amp; signed · Dept HSE</span>
+                <span>
+                  {report.kind === "monthly"
+                    ? "Reviewed & signed · Project PM"
+                    : "Reviewed & signed · Dept HSE"}
+                </span>
                 {report.kind === "weekly" && report.packet?.signed ? (
                   <>
                     <p>{report.packet.signed.by || "Dept HSE"}</p>
+                    {weeklySignedImageUrl ? (
+                      <img
+                        className="report-signature-img"
+                        src={weeklySignedImageUrl}
+                        alt="Dept HSE digital signature"
+                      />
+                    ) : null}
                     <b>Signed</b>
                     <small>
                       {report.packet.signed.at
@@ -1454,11 +1463,30 @@ function ReportViewer({
                         : "—"}
                     </small>
                   </>
+                ) : report.kind === "monthly" && report.packet?.pm_signed ? (
+                  <>
+                    <p>{report.packet.pm_signed.by || "Project PM"}</p>
+                    {pmSignedImageUrl ? (
+                      <img
+                        className="report-signature-img"
+                        src={pmSignedImageUrl}
+                        alt="Project PM digital signature"
+                      />
+                    ) : null}
+                    <b>Signed</b>
+                    <small>
+                      {report.packet.pm_signed.at
+                        ? formatDay(report.packet.pm_signed.at)
+                        : "—"}
+                    </small>
+                  </>
                 ) : (
                   <b className="muted-strong">
                     {report.kind === "weekly"
                       ? "Awaiting Dept HSE signature"
-                      : "Weekly reports signed"}
+                      : report.kind === "monthly"
+                        ? "Awaiting Project PM signature"
+                        : "Weekly reports signed"}
                   </b>
                 )}
               </div>
@@ -1466,7 +1494,12 @@ function ReportViewer({
                 <span>Issued to · Project PM</span>
                 {report.kind === "monthly" && report.packet?.issued ? (
                   <>
-                    <p>{report.packet.issued.to || "Project PM"}</p>
+                    <p>
+                      {report.packet.issued.to || "Project PM"}
+                      {report.packet.issued.email
+                        ? ` · ${report.packet.issued.email}`
+                        : ""}
+                    </p>
                     <b>Issued</b>
                     <small>
                       {report.packet.issued.at
@@ -1477,7 +1510,9 @@ function ReportViewer({
                 ) : (
                   <b className="muted-strong">
                     {report.kind === "monthly"
-                      ? "Ready to issue / awaiting issue"
+                      ? report.packet?.pm_signed
+                        ? "Ready to issue"
+                        : "Awaiting Project PM signature"
                       : "Monthly report only"}
                   </b>
                 )}
@@ -1485,6 +1520,45 @@ function ReportViewer({
             </div>
           </article>
         </div>
+        {canSignHere ? (
+          <div className="drawer-ft report-sign-ft">
+            <div className="report-sign-upload">
+              <label className="fld-ctl">
+                <span className="lbl">
+                  Digital signature <span className="req">*</span>
+                </span>
+                <span className="dropzone">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,image/bmp"
+                    onChange={(e) => setSigFile(e.target.files?.[0] ?? null)}
+                  />
+                  <strong>Upload your signature picture</strong>
+                  <span>{sigFile?.name || "PNG or JPG of your handwritten / digital signature"}</span>
+                </span>
+              </label>
+              {sigPreview ? (
+                <div className="report-sign-preview">
+                  <img src={sigPreview} alt="Signature preview" />
+                </div>
+              ) : null}
+            </div>
+            {signError ? <p className="state error">{signError}</p> : null}
+            <div className="register-actions">
+              <button type="button" className="btn ghost" onClick={onClose} disabled={signing}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!sigFile || signing}
+                onClick={() => void submitSignature()}
+              >
+                {signing ? "Signing…" : "Sign report"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1499,6 +1573,7 @@ export function ReportsScreen() {
   const [tab, setTab] = useState<ReportTab>("daily");
   const [acting, setActing] = useState(false);
   const [viewing, setViewing] = useState<BuiltReport | null>(null);
+  const [signingReportId, setSigningReportId] = useState<string | null>(null);
   const [viewingWeather, setViewingWeather] = useState<WeeklyWeatherLog | null>(null);
   const [weatherLogs, setWeatherLogs] = useState<WeeklyWeatherLog[]>([]);
 
@@ -1758,7 +1833,19 @@ export function ReportsScreen() {
                     </td>
                     <td className="muted">{row.generatedLabel}</td>
                     <td>
-                      <span className={`report-status ${row.statusTone}`}>{row.status}</span>
+                      <div className="report-status-cell">
+                        <span className={`report-status ${row.statusTone}`}>{row.status}</span>
+                        {row.kind === "weekly" && row.packet?.signed?.at ? (
+                          <small className="report-signed-at muted">
+                            {formatDay(row.packet.signed.at)}
+                          </small>
+                        ) : null}
+                        {row.kind === "monthly" && row.packet?.pm_signed?.at ? (
+                          <small className="report-signed-at muted">
+                            {formatDay(row.packet.pm_signed.at)}
+                          </small>
+                        ) : null}
+                      </div>
                     </td>
                     <td>
                       <div className="reports-row-actions">
@@ -1777,16 +1864,30 @@ export function ReportsScreen() {
                           <button
                             type="button"
                             className="btn sm primary"
-                            disabled={acting}
+                            title="Open report to upload signature and sign as Dept HSE"
                             onClick={() => {
-                              setActing(true);
-                              signReport(row.id, formatUserLabel(user))
-                                .then(() => loadReports())
-                                .catch((err) => setError(errorMessage(err)))
-                                .finally(() => setActing(false));
+                              setSigningReportId(row.id);
+                              setViewing(row);
                             }}
                           >
-                            Sign as Dept HSE
+                            Sign
+                          </button>
+                        ) : null}
+                        {row.kind === "monthly" &&
+                        row.statusTone === "awaiting" &&
+                        !row.packet?.pm_signed &&
+                        user?.role === "receiver" &&
+                        user.capabilities.sign_monthly_reports ? (
+                          <button
+                            type="button"
+                            className="btn sm primary"
+                            title="Open report to upload signature and sign as Project PM"
+                            onClick={() => {
+                              setSigningReportId(row.id);
+                              setViewing(row);
+                            }}
+                          >
+                            Sign
                           </button>
                         ) : null}
                         {row.kind === "monthly" &&
@@ -1796,15 +1897,29 @@ export function ReportsScreen() {
                             type="button"
                             className="btn sm primary"
                             disabled={acting}
+                            title="Email PDF + Excel to the Project PM (no need to open the report)"
                             onClick={() => {
                               setActing(true);
                               issueReport(row.id)
-                                .then(() => loadReports())
+                                .then((packet) => {
+                                  const delivery =
+                                    packet.delivery || packet.issued?.delivery;
+                                  const msg =
+                                    delivery?.mode === "smtp"
+                                      ? `Issued and emailed to ${delivery.to || "Project PM"}.`
+                                      : delivery?.message ||
+                                        (delivery?.to
+                                          ? `Issued for ${delivery.to}.`
+                                          : "Issued");
+                                  setError(null);
+                                  window.alert(msg);
+                                  return loadReports();
+                                })
                                 .catch((err) => setError(errorMessage(err)))
                                 .finally(() => setActing(false));
                             }}
                           >
-                            <IssueIcon /> Issue
+                            {acting ? "Issuing…" : "Issue"}
                           </button>
                         ) : null}
                       </div>
@@ -1902,7 +2017,29 @@ export function ReportsScreen() {
           dailyWeather={viewingDailyWeather}
           dailyWeatherLoaded={dailyWeatherLoaded}
           monthlyWeather={viewingMonthlyWeather}
-          onClose={() => setViewing(null)}
+          signMode={signingReportId === viewing.id}
+          onClose={() => {
+            setViewing(null);
+            setSigningReportId(null);
+          }}
+          onSigned={(packet) => {
+            setSigningReportId(null);
+            const nextTone =
+              packet.kind === "monthly" || /ready/i.test(packet.status || "")
+                ? "ready"
+                : "signed";
+            setViewing((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    packet,
+                    status: packet.status || (prev.kind === "monthly" ? "Ready to issue" : "Signed"),
+                    statusTone: nextTone,
+                  }
+                : null,
+            );
+            loadReports();
+          }}
         />
       ) : null}
       {viewingWeather ? (

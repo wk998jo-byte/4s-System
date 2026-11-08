@@ -65,6 +65,8 @@ export const ROLE_PERMISSIONS: Array<{
   { label: "Edit submitted records", operator: false, admin: true, dept_hse: false, project_pm: false },
   { label: "Delete records and users", operator: false, admin: true, dept_hse: false, project_pm: false },
   { label: "Sign weekly reports", operator: false, admin: false, dept_hse: true, project_pm: false },
+  { label: "Sign monthly reports", operator: false, admin: false, dept_hse: false, project_pm: true },
+  { label: "Issue monthly reports", operator: false, admin: true, dept_hse: false, project_pm: false },
   { label: "Receive monthly reports", operator: false, admin: false, dept_hse: false, project_pm: true },
   { label: "KPI dashboard", operator: false, admin: true, dept_hse: false, project_pm: false },
   { label: "Operator Performance", operator: false, admin: true, dept_hse: false, project_pm: false },
@@ -244,6 +246,13 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   dailyAt: "23:59",
   weeklyDay: "Saturday",
   monthlyDay: 1,
+  reportTestEmail: "",
+  reportDistribution: {
+    Jafurah: { name: "[PM name], Jafurah Project", email: "" },
+    MGS: { name: "[PM name], MGS Project", email: "" },
+    Yanbu: { name: "[PM name], Yanbu Project", email: "" },
+    "Ras Tanura": { name: "[PM name], Ras Tanura Project", email: "" },
+  },
 };
 
 export const INTEG_STATS = {
