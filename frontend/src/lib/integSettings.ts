@@ -21,6 +21,17 @@ export const SAFELIFE_SKIP_REASONS = [
   "Duplicate of an existing SafeLife entry",
 ] as const;
 
+/** Yes at register / ref at close-out → Updated; No → Pending until Closed → Not required. */
+export function safelifeStatusOf(row: {
+  status: string;
+  fields?: Record<string, unknown> | null;
+}): "Updated" | "Pending" | "Not required" {
+  const ref = String(row.fields?.safelife_ref ?? "").trim();
+  if (ref || row.fields?.safelife_update === true) return "Updated";
+  if (row.status === "closed") return "Not required";
+  return "Pending";
+}
+
 export const ITQAN_SKIP_REASONS = [
   "Internal warning only, first offence",
   "Driver could not be identified from footage",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchReports,
+  fetchWeatherHourly,
   fetchWeatherWeeklyLogs,
   fetchWeatherWeeklyPreview,
   issueReport,
@@ -10,6 +11,7 @@ import {
   type CaseSummary,
   type ReportPacket,
   type ReportsPayload,
+  type WeatherHourlyTable,
   type WeatherWeeklyLogDto,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
@@ -17,13 +19,59 @@ import { errorMessage } from "../lib/errors";
 import { useProjectAccess } from "../lib/useProjectAccess";
 import { formatUserLabel } from "./shared";
 import {
-  buildDailyWeatherTables,
   buildMonthlyWeatherMaxes,
   type DailyStationWeather,
   type MonthlyStationWeatherMax,
   type WeeklyWeatherLog,
 } from "../lib/weatherReport";
 import bqLogo from "../assets/bq-logo.png";
+
+function formatDailyWeatherDateLabel(dateIso: string) {
+  const day = new Date(`${dateIso}T00:00:00`);
+  if (Number.isNaN(day.getTime())) return dateIso;
+  const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${day.getDate()} ${mon[day.getMonth()]} ${day.getFullYear()}`;
+}
+
+/** Map saved hourly log tables into the daily-report weather section (logged hours only). */
+function dailyWeatherFromHourly(
+  dateIso: string,
+  tables: WeatherHourlyTable[],
+): DailyStationWeather[] {
+  const day = new Date(`${dateIso}T00:00:00`);
+  const { week } = sundayWeekParts(day);
+  const dateLabel = formatDailyWeatherDateLabel(dateIso);
+  return tables
+    .filter((table) => table.hours.some((row) => row.status === "ok"))
+    .map((table) => ({
+      project: table.project,
+      location: table.location,
+      dateIso: table.dateIso || dateIso,
+      dateLabel,
+      week,
+      hours: table.hours.map((row) => ({
+        hour: row.hour,
+        timeLabel: row.timeLabel,
+        status: row.status,
+        wind: row.wind,
+        temp: row.temp,
+        rh: row.rh,
+        co2: row.co2,
+        pm25: row.pm25,
+        pm10: row.pm10,
+        heatIndex: row.heatIndex,
+        category: row.category
+          ? {
+              level: row.category.level,
+              name: row.category.name,
+              prevention: row.category.prevention,
+            }
+          : undefined,
+        remarks: row.remarks,
+        loggedBy: row.loggedBy || undefined,
+      })),
+    }));
+}
 
 function asWeeklyLog(dto: WeatherWeeklyLogDto): WeeklyWeatherLog {
   return {
@@ -830,12 +878,14 @@ function ReportViewer({
   report,
   weatherLog,
   dailyWeather,
+  dailyWeatherLoaded,
   monthlyWeather,
   onClose,
 }: {
   report: BuiltReport;
   weatherLog: WeeklyWeatherLog | null;
   dailyWeather: DailyStationWeather[];
+  dailyWeatherLoaded: boolean;
   monthlyWeather: MonthlyStationWeatherMax[];
   onClose: () => void;
 }) {
@@ -1143,66 +1193,72 @@ function ReportViewer({
               </>
             ) : null}
 
-            {report.kind === "daily" && dailyWeather.length ? (
+            {report.kind === "daily" && dailyWeatherLoaded ? (
               <>
                 <h3 className="report-sec">Weather monitoring · hourly readings</h3>
-                {dailyWeather.map((station) => (
-                  <div key={`${station.project}-${station.location}`} className="report-wx-block">
-                    <p className="report-wx-sub">
-                      <b>{station.location}</b> · {station.project} · {station.dateLabel} · Week{" "}
-                      {station.week}
-                    </p>
-                    <div className="table-wrap report-wx-scroll">
-                      <table className="report-table report-wx-hourly">
-                        <thead>
-                          <tr>
-                            <th>Time</th>
-                            <th className="num">Wind (m/s)</th>
-                            <th className="num">Temp (°C)</th>
-                            <th className="num">RH (%)</th>
-                            <th className="num">CO2 (ppm)</th>
-                            <th className="num">PM2.5</th>
-                            <th className="num">PM10</th>
-                            <th className="num">Heat index</th>
-                            <th>Category</th>
-                            <th>Remarks / corrective actions</th>
-                            <th>Logged by</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {station.hours.map((row) =>
-                            row.status === "ok" ? (
-                              <tr key={row.hour}>
-                                <td>{row.timeLabel}</td>
-                                <td className="num">{row.wind}</td>
-                                <td className="num">{row.temp}</td>
-                                <td className="num">{row.rh}</td>
-                                <td className="num">{row.co2}</td>
-                                <td className="num">{row.pm25}</td>
-                                <td className="num">{row.pm10}</td>
-                                <td className="num">
-                                  <b>{row.heatIndex}</b>
-                                </td>
-                                <td>{row.category?.name}</td>
-                                <td>{row.remarks}</td>
-                                <td>{row.loggedBy}</td>
-                              </tr>
-                            ) : (
-                              <tr key={row.hour}>
-                                <td>{row.timeLabel}</td>
-                                <td colSpan={10} className="muted">
-                                  {row.status === "upcoming"
-                                    ? "Not due yet"
-                                    : "No reading logged"}
-                                </td>
-                              </tr>
-                            ),
-                          )}
-                        </tbody>
-                      </table>
+                {dailyWeather.length ? (
+                  dailyWeather.map((station) => (
+                    <div key={`${station.project}-${station.location}`} className="report-wx-block">
+                      <p className="report-wx-sub">
+                        <b>{station.location}</b> · {station.project} · {station.dateLabel} · Week{" "}
+                        {station.week}
+                      </p>
+                      <div className="table-wrap report-wx-scroll">
+                        <table className="report-table report-wx-hourly">
+                          <thead>
+                            <tr>
+                              <th>Time</th>
+                              <th className="num">Wind (m/s)</th>
+                              <th className="num">Temp (°C)</th>
+                              <th className="num">RH (%)</th>
+                              <th className="num">CO2 (ppm)</th>
+                              <th className="num">PM2.5</th>
+                              <th className="num">PM10</th>
+                              <th className="num">Heat index</th>
+                              <th>Category</th>
+                              <th>Remarks / corrective actions</th>
+                              <th>Logged by</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {station.hours.map((row) =>
+                              row.status === "ok" ? (
+                                <tr key={row.hour}>
+                                  <td>{row.timeLabel}</td>
+                                  <td className="num">{row.wind}</td>
+                                  <td className="num">{row.temp}</td>
+                                  <td className="num">{row.rh}</td>
+                                  <td className="num">{row.co2}</td>
+                                  <td className="num">{row.pm25}</td>
+                                  <td className="num">{row.pm10}</td>
+                                  <td className="num">
+                                    <b>{row.heatIndex}</b>
+                                  </td>
+                                  <td>{row.category?.name}</td>
+                                  <td>{row.remarks}</td>
+                                  <td>{row.loggedBy}</td>
+                                </tr>
+                              ) : (
+                                <tr key={row.hour}>
+                                  <td>{row.timeLabel}</td>
+                                  <td colSpan={10} className="muted">
+                                    {row.status === "upcoming"
+                                      ? "Not due yet"
+                                      : "No reading logged"}
+                                  </td>
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="report-truncation-note">
+                    No hourly weather readings logged for this day.
+                  </p>
+                )}
               </>
             ) : null}
 
@@ -1509,6 +1565,8 @@ export function ReportsScreen() {
     [packets, cases, projectNames],
   );
   const [viewingWeatherLog, setViewingWeatherLog] = useState<WeeklyWeatherLog | null>(null);
+  const [viewingDailyWeather, setViewingDailyWeather] = useState<DailyStationWeather[]>([]);
+  const [dailyWeatherLoaded, setDailyWeatherLoaded] = useState(false);
 
   useEffect(() => {
     if (!viewing || viewing.kind !== "weekly") {
@@ -1535,13 +1593,38 @@ export function ReportsScreen() {
     };
   }, [viewing, weatherLogs]);
 
-  const viewingDailyWeather = useMemo(() => {
-    if (!viewing || viewing.kind !== "daily") return [];
+  useEffect(() => {
+    if (!viewing || viewing.kind !== "daily") {
+      setViewingDailyWeather([]);
+      setDailyWeatherLoaded(false);
+      return;
+    }
     const projects =
       projectNames.length > 0
         ? projectNames
         : ["Jafurah", "MGS", "Yanbu", "Ras Tanura"];
-    return buildDailyWeatherTables(viewing.periodIso, projects);
+    let cancelled = false;
+    setDailyWeatherLoaded(false);
+    Promise.all(
+      projects.map((project) =>
+        fetchWeatherHourly(project, viewing.periodIso).then((res) => res.tables),
+      ),
+    )
+      .then((tablesByProject) => {
+        if (cancelled) return;
+        setViewingDailyWeather(
+          dailyWeatherFromHourly(viewing.periodIso, tablesByProject.flat()),
+        );
+        setDailyWeatherLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setViewingDailyWeather([]);
+        setDailyWeatherLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [viewing, projectNames]);
 
   const viewingMonthlyWeather = useMemo(() => {
@@ -1817,6 +1900,7 @@ export function ReportsScreen() {
           report={viewing}
           weatherLog={viewingWeatherLog}
           dailyWeather={viewingDailyWeather}
+          dailyWeatherLoaded={dailyWeatherLoaded}
           monthlyWeather={viewingMonthlyWeather}
           onClose={() => setViewing(null)}
         />

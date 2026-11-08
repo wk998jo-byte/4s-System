@@ -461,6 +461,35 @@ def get_weather_hourly(
     }
 
 
+@router.get("/weather/day-maxes")
+def get_weather_day_maxes(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    project: str | None = None,
+    user: UserOut = Depends(get_current_user),
+):
+    allowed = [str(p) for p in (user.projects or [])]
+    if project:
+        if allowed and project not in allowed:
+            return {"items": []}
+        projects = None
+        project_filter = project
+    elif allowed:
+        projects = allowed
+        project_filter = None
+    else:
+        projects = None
+        project_filter = None
+    return {
+        "items": platform_store.get_weather_day_maxes(
+            date_from,
+            date_to,
+            project=project_filter,
+            projects=projects,
+        ),
+    }
+
+
 @router.put("/weather/hourly")
 def put_weather_hourly(
     body: WeatherHourlySaveIn,

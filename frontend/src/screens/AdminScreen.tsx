@@ -1046,7 +1046,7 @@ export function AdminScreen() {
                 [
                   "safelifeDefault",
                   "Default answer: Update in SafeLife",
-                  "Pre-selects Yes on the form. The SafeLife reference is required at close-out.",
+                  "Pre-selects Yes on the form. Yes requires a SafeLife reference at register; No leaves status Pending until close-out or Closed.",
                 ],
               ] as const
             ).map(([key, title, sub]) => (

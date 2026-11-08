@@ -1294,14 +1294,8 @@ class PlatformStore:
                     if payload.updated_in_safelife
                     else None
                 ),
-                "safelife_skip_reason": (
-                    None
-                    if bool(payload.updated_in_safelife)
-                    else (
-                        (getattr(payload, "safelife_skip_reason", None) or "").strip()
-                        or None
-                    )
-                ),
+                # No skip-reason on register: No → Pending until close-out or Closed.
+                "safelife_skip_reason": None,
             },
         }
         return self._insert_case(record)
@@ -1452,6 +1446,12 @@ class PlatformStore:
             record["fields"]["close_out_action"] = payload.close_out_action.strip()
             record["fields"]["close_out_picture"] = payload.close_out_picture.strip()
             record["fields"]["close_out_submitted_by"] = actor or "Operator"
+            # Optional SafeLife at close-out: if provided, mark Updated.
+            sl_ref = (getattr(payload, "safelife_reference", None) or "").strip()
+            if sl_ref:
+                record["fields"]["safelife_ref"] = sl_ref
+                record["fields"]["safelife_update"] = True
+                record["fields"]["safelife_skip_reason"] = None
 
         return self._patch_case(case_id, "ai_camera", mutate)
 
@@ -2284,7 +2284,16 @@ class PlatformStore:
                 upcoming = observed_on > today or (
                     observed_on == today and hour > now.hour
                 )
-                if row:
+                # Upcoming hours stay locked even if a prior save wrote a stub row.
+                if upcoming:
+                    hours.append(
+                        {
+                            "hour": hour,
+                            "timeLabel": _hour_label(hour),
+                            "status": "upcoming",
+                        }
+                    )
+                elif row:
                     hours.append(
                         {
                             "hour": hour,
@@ -2310,14 +2319,6 @@ class PlatformStore:
                             ),
                             "remarks": row.remarks or "",
                             "loggedBy": row.logged_by,
-                        }
-                    )
-                elif upcoming:
-                    hours.append(
-                        {
-                            "hour": hour,
-                            "timeLabel": _hour_label(hour),
-                            "status": "upcoming",
                         }
                     )
                 else:
@@ -2351,6 +2352,7 @@ class PlatformStore:
             if not project or not location:
                 raise ValueError("Unknown weather station.")
         now = datetime.now(timezone.utc)
+        local_now = datetime.now(AST)
         logged_by = (payload.logged_by or "").strip() or None
 
         with self._lock, self._sessions() as session:
@@ -2358,6 +2360,11 @@ class PlatformStore:
                 hour = int(cell.hour)
                 if hour not in WEATHER_DAY_HOURS:
                     raise ValueError(f"Hour {hour} is outside the 7:00–14:00 window.")
+                # Reject future hours so a save cannot unlock the rest of the day.
+                if observed_on > local_now.date() or (
+                    observed_on == local_now.date() and hour > local_now.hour
+                ):
+                    continue
                 existing = (
                     session.query(WeatherHourlyReadingRow)
                     .filter(
@@ -2403,7 +2410,13 @@ class PlatformStore:
                 existing.category_name = cat["name"] if cat else None
                 existing.remarks = cell.remarks
                 existing.status = status
-                existing.logged_by = logged_by
+                # Per-hour logger: keep prior person unless this cell names someone
+                # (or the row never had a logger yet).
+                cell_logger = (getattr(cell, "logged_by", None) or "").strip() or None
+                if cell_logger:
+                    existing.logged_by = cell_logger
+                elif not existing.logged_by:
+                    existing.logged_by = logged_by
                 existing.updated_at = now
             session.commit()
         return self.get_weather_hourly(project, observed_on)
@@ -2433,8 +2446,10 @@ class PlatformStore:
         temp = max((r.temp_c or 0) for r in ok_rows)
         rh = max((r.rh_percent or 0) for r in ok_rows)
         co2 = max((r.co2_ppm or 0) for r in ok_rows)
+        pm25 = max((r.pm25 or 0) for r in ok_rows)
         pm10 = max((r.pm10 or 0) for r in ok_rows)
         heat = max((r.heat_index or 0) for r in ok_rows)
+        peak = max(ok_rows, key=lambda r: (r.heat_index or 0, r.hour))
         return {
             "dateIso": day.isoformat(),
             "dayLabel": f"{_format_day_name(day)} {_format_short_day(day)}",
@@ -2444,10 +2459,59 @@ class PlatformStore:
             "temp": round(temp, 1),
             "rh": rh,
             "co2": co2,
+            "pm25": pm25,
             "pm10": pm10,
             "heatIndex": round(heat, 1),
+            "peakHour": peak.hour,
             "category": _heat_category(heat),
         }
+
+    def get_weather_day_maxes(
+        self,
+        date_from: date,
+        date_to: date,
+        project: str | None = None,
+        projects: list[str] | None = None,
+    ) -> list[dict]:
+        """Daily highest readings from logged hourly rows only (no synthetic data)."""
+        if date_to < date_from:
+            date_from, date_to = date_to, date_from
+        with self._sessions() as session:
+            q = session.query(WeatherHourlyReadingRow).filter(
+                WeatherHourlyReadingRow.observed_on >= date_from,
+                WeatherHourlyReadingRow.observed_on <= date_to,
+                WeatherHourlyReadingRow.status == "ok",
+            )
+            if project:
+                q = q.filter(WeatherHourlyReadingRow.project == project)
+            elif projects is not None:
+                if not projects:
+                    return []
+                q = q.filter(WeatherHourlyReadingRow.project.in_(projects))
+            rows = q.all()
+
+        by_station_day: dict[tuple[str, date], list[WeatherHourlyReadingRow]] = {}
+        for row in rows:
+            by_station_day.setdefault((row.station_id, row.observed_on), []).append(row)
+
+        station_meta = {s["id"]: s for s in WEATHER_STATIONS}
+        out: list[dict] = []
+        for (station_id, day), day_rows in by_station_day.items():
+            day_max = self._day_max_from_rows(day_rows, day)
+            if day_max["hoursLogged"] <= 0:
+                continue
+            meta = station_meta.get(station_id)
+            out.append(
+                {
+                    "stationId": station_id,
+                    "project": day_rows[0].project,
+                    "location": day_rows[0].location
+                    or (meta["loc"] if meta else station_id),
+                    **day_max,
+                }
+            )
+        out.sort(key=lambda item: (item["dateIso"], item["project"], item["location"]), reverse=True)
+        return out
 
     def build_weather_weekly_preview(
         self,
@@ -2787,7 +2851,16 @@ class PlatformStore:
             if row and isinstance(row.value, dict):
                 raw_items = row.value.get("items")
                 if isinstance(raw_items, list):
-                    items = [item for item in raw_items if isinstance(item, dict)]
+                    for item in raw_items:
+                        if not isinstance(item, dict):
+                            continue
+                        device = str(item.get("device") or "")
+                        status = str(item.get("status") or "")
+                        coerced = dict(item)
+                        coerced["status"] = self._hw_coerce_status_for_device(
+                            device, status
+                        )
+                        items.append(coerced)
             return {"items": items, "total": len(items)}
 
     def _save_hw_register_items(self, items: list[dict]) -> None:
@@ -2853,6 +2926,16 @@ class PlatformStore:
             }
         )
         return aliases
+
+    @staticmethod
+    def _hw_is_wearable(device: str) -> bool:
+        return device in {"Smart Helmet", "Smart Watch"}
+
+    def _hw_coerce_status_for_device(self, device: str, status: str) -> str:
+        """Assigned is only valid for Smart Helmet / Smart Watch."""
+        if status == "Assigned" and not self._hw_is_wearable(device):
+            return "In Stock"
+        return status
 
     def _adjust_hw_project_count(
         self,
@@ -2944,6 +3027,12 @@ class PlatformStore:
             status = status_aliases.get(str(status_raw or "").strip().lower())
             if not status:
                 errors.append(f"Row {row_idx}: unknown status “{status_raw}”.")
+                continue
+            if status == "Assigned" and not self._hw_is_wearable(device):
+                errors.append(
+                    f"Row {row_idx}: status “Assigned” is only allowed for "
+                    f"Smart Helmet and Smart Watch (got “{device}”)."
+                )
                 continue
             project = str(project_raw or "").strip()
             if project not in valid_sites:

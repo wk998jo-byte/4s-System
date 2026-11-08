@@ -239,6 +239,34 @@ export const fetchWeatherHourly = (project: string, observedOn: string) =>
     `/api/v1/weather/hourly?project=${encodeURIComponent(project)}&observed_on=${encodeURIComponent(observedOn)}`,
   );
 
+export interface WeatherDayMaxDto {
+  stationId: string;
+  project: string;
+  location: string;
+  dateIso: string;
+  dayLabel: string;
+  hoursLogged: number;
+  hoursExpected: number;
+  wind: number;
+  temp: number;
+  rh: number;
+  co2: number;
+  pm25: number;
+  pm10: number;
+  heatIndex: number;
+  peakHour?: number;
+  category: { level: number; name: string; prevention: string };
+}
+
+export const fetchWeatherDayMaxes = (dateFrom: string, dateTo: string, project?: string) => {
+  const params = new URLSearchParams({
+    date_from: dateFrom,
+    date_to: dateTo,
+  });
+  if (project && project !== "All") params.set("project", project);
+  return request<{ items: WeatherDayMaxDto[] }>(`/api/v1/weather/day-maxes?${params.toString()}`);
+};
+
 export const saveWeatherHourly = (body: {
   station_id: string;
   project: string;
@@ -256,6 +284,7 @@ export const saveWeatherHourly = (body: {
     heat_index?: number | null;
     remarks?: string | null;
     status?: string;
+    logged_by?: string | null;
   }>;
 }) =>
   request<{ tables: WeatherHourlyTable[] }>("/api/v1/weather/hourly", {

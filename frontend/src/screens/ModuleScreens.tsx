@@ -292,6 +292,7 @@ export function AiCameraForm() {
     hseo_name_badge: "",
     close_out_action: "",
     close_out_picture: "",
+    safelife_reference: "",
   });
   const [form, setForm] = useState({
     project_id: "",
@@ -558,6 +559,20 @@ export function AiCameraForm() {
                   <span>
                     {closeout.close_out_picture || "Image of the corrective action"}
                   </span>
+                </span>
+              </label>
+              <label>
+                SafeLife reference number
+                <input
+                  disabled={!unlocked}
+                  placeholder="Optional — SL-000000"
+                  value={closeout.safelife_reference}
+                  onChange={(event) =>
+                    setCloseout({ ...closeout, safelife_reference: event.target.value })
+                  }
+                />
+                <span className="field-note">
+                  Optional. Sets SafeLife to Updated when filled.
                 </span>
               </label>
               <div className="closeout-actions">

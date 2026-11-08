@@ -25,10 +25,7 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import {
-  SAFELIFE_SKIP_REASONS,
-  useIntegSettings,
-} from "../lib/integSettings";
+import { safelifeStatusOf, useIntegSettings } from "../lib/integSettings";
 import { href } from "../lib/routing";
 import { AiCameraRecordDrawer } from "./AiCameraRecordDrawer";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
@@ -92,7 +89,7 @@ const SLA_LABEL: Record<string, string> = {
   Low: "7 days",
 };
 const SAFELIFE_NO =
-  "SafeLife entry is completed by the HSEO at the site. Operator marks Not updated when registration does not include a SafeLife reference.";
+  "SafeLife can be completed later at close-out. Until then the observation stays Pending; if it is closed without a SafeLife entry it becomes Not required.";
 
 function fmtN(n: number) {
   return Number(n || 0).toLocaleString("en-US");
@@ -1068,7 +1065,6 @@ function AiCameraNewDrawer({
   const [error, setError] = useState<string | null>(null);
   const [pictureFile, setPictureFile] = useState<File | null>(null);
   const [safelife, setSafelife] = useState<"Yes" | "No">("Yes");
-  const [safelifeSkipReason, setSafelifeSkipReason] = useState("");
   const [form, setForm] = useState({
     project_id: "",
     location: "",
@@ -1096,7 +1092,6 @@ function AiCameraNewDrawer({
   useEffect(() => {
     if (!open) return;
     setSafelife(integ.safelifeDefault ? "Yes" : "No");
-    setSafelifeSkipReason("");
   }, [open, integ.safelifeDefault]);
 
   useEffect(() => {
@@ -1135,7 +1130,7 @@ function AiCameraNewDrawer({
     form.alert_summary.trim(),
     pictureFile ? "ok" : "",
     actorName,
-    safelife === "Yes" ? form.safelife_reference.trim() : safelifeSkipReason.trim(),
+    safelife === "Yes" ? form.safelife_reference.trim() : "ok",
   ];
   const completed = required.filter(Boolean).length;
   const remaining = required.length - completed;
@@ -1165,7 +1160,7 @@ function AiCameraNewDrawer({
         observation_picture: uploaded.url,
         updated_in_safelife: safelife === "Yes",
         safelife_reference: safelife === "Yes" ? form.safelife_reference : null,
-        safelife_skip_reason: safelife === "No" ? safelifeSkipReason : null,
+        safelife_skip_reason: null,
       });
       onRegistered(created);
     } catch (err) {
@@ -1426,10 +1421,7 @@ function AiCameraNewDrawer({
                             type="radio"
                             name="safelife"
                             checked={safelife === opt}
-                            onChange={() => {
-                              setSafelife(opt);
-                              if (opt === "Yes") setSafelifeSkipReason("");
-                            }}
+                            onChange={() => setSafelife(opt)}
                           />
                           <span className="radio-dot" aria-hidden />
                           <span>{opt}</span>
@@ -1462,26 +1454,7 @@ function AiCameraNewDrawer({
                   </div>
                 ) : (
                   <div className="fld full">
-                    <div className="note" style={{ marginBottom: 8 }}>
-                      {SAFELIFE_NO}
-                    </div>
-                    <label className="fld-ctl">
-                      <span className="lbl">
-                        Reason for not updating in SafeLife <span className="req">*</span>
-                      </span>
-                      <select
-                        required
-                        value={safelifeSkipReason}
-                        onChange={(e) => setSafelifeSkipReason(e.target.value)}
-                      >
-                        <option value="">Select</option>
-                        {SAFELIFE_SKIP_REASONS.map((reason) => (
-                          <option key={reason} value={reason}>
-                            {reason}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="note">{SAFELIFE_NO}</div>
                   </div>
                 )}
                 <div className="fld full">
@@ -1665,9 +1638,10 @@ export function AiCameraScreen({
   const closedN = scoped.filter((r) => r.status === "closed").length;
   const posN = scoped.filter(isPositive).length;
   const prevPos = prev.filter(isPositive).length;
-  const slWanted = scoped.filter((r) => Boolean(r.fields?.safelife_update));
-  const slDone = slWanted.filter((r) => r.status !== "open").length;
-  const slPct = slWanted.length ? `${pct(slDone, slWanted.length)}%` : "—";
+  const slUpdated = scoped.filter((r) => safelifeStatusOf(r) === "Updated").length;
+  const slPending = scoped.filter((r) => safelifeStatusOf(r) === "Pending").length;
+  const slPct =
+    slUpdated + slPending > 0 ? `${pct(slUpdated, slUpdated + slPending)}%` : "—";
 
   const catLabels = useMemo(
     () => categoryList.items.map((i) => i.label),
@@ -1831,11 +1805,7 @@ export function AiCameraScreen({
           field(r, "category"),
           riskKey(r),
           statusLabel(r.status),
-          r.fields?.safelife_update
-            ? r.status === "open"
-              ? "Pending"
-              : "Updated"
-            : "Not required",
+          safelifeStatusOf(r),
           field(r, "reported_by"),
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
@@ -1973,7 +1943,7 @@ export function AiCameraScreen({
           title="Updated in SafeLife"
           icon="sync"
           value={slPct}
-          sub={`${fmtN(slDone)} entries synced`}
+          sub={`${fmtN(slUpdated)} updated · ${fmtN(slPending)} pending`}
         />
       </div>
 
@@ -2200,13 +2170,12 @@ export function AiCameraScreen({
                         <StatusPill status={r.status} />
                       </td>
                       <td>
-                        {r.fields?.safelife_update ? (
-                          <span className={`tagx${r.status === "open" ? "" : " green"}`}>
-                            {r.status === "open" ? "Pending" : "Updated"}
-                          </span>
-                        ) : (
-                          <span className="tagx">Not required</span>
-                        )}
+                        {(() => {
+                          const sl = safelifeStatusOf(r);
+                          if (sl === "Updated") return <span className="tagx green">Updated</span>;
+                          if (sl === "Pending") return <span className="tagx">Pending</span>;
+                          return <span className="tagx">Not required</span>;
+                        })()}
                       </td>
                       <td>{field(r, "reported_by") || "—"}</td>
                       <td>

@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchWeatherDayMaxes,
   fetchWeatherHourly,
   fetchWeatherWeeklyLogs,
   fetchWeatherWeeklyPreview,
   saveWeatherHourly,
   submitWeatherWeekly,
+  type WeatherDayMaxDto,
+  type WeatherHourlyTable,
   type WeatherWeeklyLogDto,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { formatUserLabel } from "./shared";
 import {
   heatCategory,
-  hourlyRowsForDay,
   isoDate,
-  latestStationReading,
-  monthlyHiByProject,
-  stationDayMaxes,
   sundayWeekBounds,
   sundayWeekParts,
   weatherPeriodRange,
@@ -90,6 +89,23 @@ type TabId = "dash" | "log" | "weekly";
 
 const MON3 = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Current week + the previous 3 — never more than 4 choices in the weekly log dropdown. */
+const WEEKLY_LOG_WEEK_CHOICES = 4;
+
+function buildWeeklyLogWeekOptions(ref: Date = new Date()) {
+  const { start } = sundayWeekBounds(ref);
+  return Array.from({ length: WEEKLY_LOG_WEEK_CHOICES }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() - i * 7);
+    const { week } = sundayWeekParts(d);
+    const mon = MONTHS[d.getMonth()];
+    return {
+      startIso: isoDate(d),
+      label: `Week ${week} · ${d.getDate()} ${mon}${i === 0 ? " (in progress)" : ""}`,
+    };
+  });
+}
 const CAT_NAMES = ["Normal", "Caution", "Extreme Caution", "Danger", "Extreme Danger"] as const;
 const CAT_COLORS = ["#A9A6A3", "#E9CF6A", "#F0A04B", "#E5604F", "#8E0B20"];
 const PROJECT_COLORS = ["#C8102E", "#8B8A8F", "#E9CF6A", "#A67C52"];
@@ -841,10 +857,14 @@ export function WeatherScreen() {
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitProject, setSubmitProject] = useState<string>(WEATHER_PROJECTS[0]);
   const [submitWeekStart, setSubmitWeekStart] = useState("");
+  const [submitWeekOptions, setSubmitWeekOptions] = useState(() => buildWeeklyLogWeekOptions());
   const [submitRemarks, setSubmitRemarks] = useState("");
   const [submitPreview, setSubmitPreview] = useState<WeeklyWeatherLog | null>(null);
   const [savingStationId, setSavingStationId] = useState<string | null>(null);
   const [submittingBusy, setSubmittingBusy] = useState(false);
+  const [dashDaysRaw, setDashDaysRaw] = useState<WeatherDayMaxDto[]>([]);
+  const [dashTodayTables, setDashTodayTables] = useState<WeatherHourlyTable[]>([]);
+  const [dashRefreshKey, setDashRefreshKey] = useState(0);
 
   const { hasAllProjectAccess, accessProjects, singleProject } = useProjectAccess([
     ...WEATHER_PROJECTS,
@@ -867,6 +887,9 @@ export function WeatherScreen() {
   }, [accessProjects, project, hasAllProjectAccess, singleProject]);
 
   const range = useMemo(() => weatherPeriodRange(period, now), [period, now]);
+  const todayIso = isoDate(now);
+  const rangeFromIso = isoDate(range.a);
+  const rangeToIso = isoDate(range.b);
 
   const stations = useMemo(
     () =>
@@ -878,61 +901,153 @@ export function WeatherScreen() {
     [project, accessProjects],
   );
 
+  const dashProjects = useMemo(
+    () =>
+      project === "All" ? accessProjects : accessProjects.filter((p) => p === project),
+    [project, accessProjects],
+  );
+
+  useEffect(() => {
+    if (tab !== "dash") return;
+    let cancelled = false;
+    async function loadDash() {
+      try {
+        const [maxes, ...hourly] = await Promise.all([
+          fetchWeatherDayMaxes(rangeFromIso, rangeToIso, project === "All" ? undefined : project),
+          ...dashProjects.map((p) => fetchWeatherHourly(p, todayIso)),
+        ]);
+        if (cancelled) return;
+        setDashDaysRaw(maxes.items.filter((item) => accessProjects.includes(item.project)));
+        setDashTodayTables(
+          hourly.flatMap((res) => res.tables).filter((t) => accessProjects.includes(t.project)),
+        );
+      } catch {
+        if (!cancelled) {
+          setDashDaysRaw([]);
+          setDashTodayTables([]);
+        }
+      }
+    }
+    void loadDash();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tab,
+    project,
+    rangeFromIso,
+    rangeToIso,
+    todayIso,
+    dashProjects.join("|"),
+    accessProjects.join("|"),
+    dashRefreshKey,
+  ]);
+
   const days = useMemo(() => {
-    const raw = stationDayMaxes(project, range.a, range.b, now).filter((d) =>
-      accessProjects.includes(d.station.project),
-    );
+    const stationById = new Map(WEATHER_STATIONS.map((s) => [s.id, s]));
+    const raw = dashDaysRaw.map((d) => {
+      const station =
+        stationById.get(d.stationId) ||
+        ({ id: d.stationId, project: d.project, loc: d.location } satisfies WeatherStation);
+      return {
+        station,
+        t: new Date(`${d.dateIso}T00:00:00`).getTime(),
+        dateIso: d.dateIso,
+        T: d.temp,
+        RH: d.rh,
+        hi: d.heatIndex,
+        wind: d.wind,
+        pm25: d.pm25 ?? 0,
+        pm10: d.pm10,
+        co2: d.co2,
+        n: d.hoursLogged,
+        category: d.category,
+      };
+    });
     if (category === "All") return raw;
     return raw.filter((d) => d.category.name === category);
-  }, [project, range, now, category, accessProjects]);
+  }, [dashDaysRaw, category]);
 
   const highestHi = useMemo(() => days.reduce((a, d) => Math.max(a, d.hi), 0), [days]);
 
   const byProjectHi = useMemo(() => {
-    const projs =
-      project === "All" ? accessProjects : accessProjects.filter((p) => p === project);
-    return projs.map((p) => ({
+    return dashProjects.map((p) => ({
       project: p,
       hi: days.filter((d) => d.station.project === p).reduce((a, d) => Math.max(a, d.hi), 0),
     }));
-  }, [days, project, accessProjects]);
+  }, [days, dashProjects]);
 
   const catCounts = useMemo(
     () => CAT_NAMES.map((name) => days.filter((d) => d.category.name === name).length),
     [days],
   );
 
-  const todayHourly = useMemo(() => {
-    const today = isoDate(now);
-    return stations.map((st) => ({
-      station: st,
-      hours: hourlyRowsForDay(st.project, st.loc, new Date(`${today}T00:00:00`), now),
-    }));
-  }, [stations, now]);
+  /** Station cards: today's daily highest from logged hourly rows only. */
+  const stationCards = useMemo(() => {
+    return stations.flatMap((st) => {
+      const table = dashTodayTables.find((t) => t.stationId === st.id);
+      const ok = (table?.hours || []).filter((h) => h.status === "ok" && h.heatIndex != null);
+      if (!ok.length) return [];
+      const heatIndex = Math.max(...ok.map((h) => h.heatIndex ?? 0));
+      const temp = Math.max(...ok.map((h) => h.temp ?? 0));
+      const rh = Math.max(...ok.map((h) => h.rh ?? 0));
+      const wind = Math.max(...ok.map((h) => h.wind ?? 0));
+      const pm25 = Math.max(...ok.map((h) => h.pm25 ?? 0));
+      const peak = ok.reduce((best, row) =>
+        (row.heatIndex ?? 0) >= (best.heatIndex ?? 0) ? row : best,
+      );
+      const cat = peak.category || heatCategory(heatIndex);
+      return [
+        {
+          station: st,
+          heatIndex: Math.round(heatIndex * 10) / 10,
+          temp: Math.round(temp * 10) / 10,
+          rh,
+          wind: Math.round(wind * 10) / 10,
+          pm25,
+          peakHour: peak.hour,
+          category: cat,
+        },
+      ];
+    });
+  }, [stations, dashTodayTables]);
 
-  const trend = useMemo(() => monthlyHiByProject(project === "All" ? "All" : project, now), [
-    project,
-    now,
-  ]);
+  const todayHourly = useMemo(
+    () =>
+      stations
+        .map((st) => {
+          const table = dashTodayTables.find((t) => t.stationId === st.id);
+          return {
+            station: st,
+            hours: table?.hours || [],
+          };
+        })
+        .filter((row) => row.hours.some((h) => h.status === "ok")),
+    [stations, dashTodayTables],
+  );
+
+  const trend = useMemo(() => {
+    const months = now.getMonth() + 1;
+    return dashProjects.map((p) => ({
+      project: p,
+      values: Array.from({ length: months }, (_, mi) => {
+        let mx = 0;
+        for (const d of dashDaysRaw) {
+          if (d.project !== p) continue;
+          const dt = new Date(`${d.dateIso}T00:00:00`);
+          if (dt.getFullYear() === now.getFullYear() && dt.getMonth() === mi) {
+            mx = Math.max(mx, d.heatIndex);
+          }
+        }
+        return mx;
+      }),
+    }));
+  }, [dashDaysRaw, dashProjects, now]);
 
   const observations = useMemo(
     () => [...days].sort((a, b) => b.t - a.t || b.hi - a.hi),
     [days],
   );
-
-  const weekOptions = useMemo(() => {
-    const { start } = sundayWeekBounds(now);
-    return [0, 1, 2, 3].map((i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() - i * 7);
-      const { week } = sundayWeekParts(d);
-      const mon = MONTHS[d.getMonth()];
-      return {
-        startIso: isoDate(d),
-        label: `Week ${week} · ${d.getDate()} ${mon}${i === 0 ? " (in progress)" : ""}`,
-      };
-    });
-  }, [now]);
 
   async function reloadWeeklyLogs() {
     try {
@@ -1039,8 +1154,12 @@ export function WeatherScreen() {
         ? project
         : accessProjects[0] || WEATHER_PROJECTS[0];
     if (!accessProjects.includes(preferred)) return;
-    const week = weekOptions[1] || weekOptions[0];
+    // Always rebuild from "now" so the dialog opens on the live current week,
+    // with only that week plus the previous 3 in the dropdown.
+    const options = buildWeeklyLogWeekOptions(new Date());
+    const week = options[0];
     if (!week) return;
+    setSubmitWeekOptions(options);
     setSubmitProject(preferred);
     setSubmitWeekStart(week.startIso);
     setSubmitRemarks("");
@@ -1050,8 +1169,16 @@ export function WeatherScreen() {
   async function saveStationReadings(st: WeatherStation) {
     setSavingStationId(st.id);
     try {
+      // Only persist hours that are due. Never convert upcoming → missing,
+      // or save unlocks the rest of the day after one reading.
+      const currentUser = formatUserLabel(user) || user?.username || "";
+      const editKey = `${st.id}|${logDate}`;
+      const hourEdits = logEdits[editKey] || {};
       const readings = WEATHER_DAY_HOURS.map((hour) => {
         const row = rowFor(st, hour);
+        const touched = hour in hourEdits;
+        // Preserve prior logger for untouched hours; stamp current user on edits/new.
+        const hourLogger = touched || !row.loggedBy ? currentUser : row.loggedBy;
         return {
           hour,
           wind: row.wind ?? null,
@@ -1062,7 +1189,8 @@ export function WeatherScreen() {
           pm10: row.pm10 ?? null,
           heat_index: row.heatIndex ?? null,
           remarks: row.remarks ?? null,
-          status: row.status === "upcoming" ? "missing" : row.status,
+          status: row.status,
+          logged_by: hourLogger || null,
         };
       }).filter((row) => row.status !== "upcoming");
       const res = await saveWeatherHourly({
@@ -1070,7 +1198,7 @@ export function WeatherScreen() {
         project: st.project,
         location: st.loc,
         observed_on: logDate,
-        logged_by: formatUserLabel(user) || user?.username,
+        logged_by: currentUser || undefined,
         readings,
       });
       const next: Record<string, HourlyWeatherRow[]> = { ...dbHourly };
@@ -1085,6 +1213,7 @@ export function WeatherScreen() {
       });
       setSavedFlash(`Saved readings for ${st.loc}`);
       window.setTimeout(() => setSavedFlash(null), 2200);
+      setDashRefreshKey((n) => n + 1);
     } catch (err) {
       setSavedFlash(err instanceof Error ? err.message : "Save failed");
       window.setTimeout(() => setSavedFlash(null), 3200);
@@ -1118,21 +1247,21 @@ export function WeatherScreen() {
   }
 
   function rowFor(st: WeatherStation, hour: number): HourlyWeatherRow {
+    const timeLabel = `${((hour + 11) % 12) + 1}:00 ${hour >= 12 ? "PM" : "AM"}`;
+    // Future hours stay locked even if a bad save left a DB row.
+    if ((isLogToday && hour > now.getHours()) || logDate > isoDate(now)) {
+      return { hour, timeLabel, status: "upcoming" };
+    }
     const fromDb = dbHourly[st.id]?.find((h) => h.hour === hour);
     const base =
       fromDb ||
       ({
         hour,
-        timeLabel: `${((hour + 11) % 12) + 1}:00 ${hour >= 12 ? "PM" : "AM"}`,
-        status:
-          isLogToday && hour > now.getHours()
-            ? "upcoming"
-            : logDate > isoDate(now)
-              ? "upcoming"
-              : "missing",
+        timeLabel,
+        status: "missing",
       } as HourlyWeatherRow);
     const edit = logEdits[`${st.id}|${logDate}`]?.[hour];
-    return edit ? { ...base, ...edit } : base;
+    return edit ? { ...base, ...edit, status: edit.status ?? base.status } : base;
   }
 
   return (
@@ -1236,52 +1365,57 @@ export function WeatherScreen() {
           </div>
 
           <div className="wx-station-grid">
-            {stations.map((st) => {
-              const latest = latestStationReading(st, now);
-              if (!latest || latest.heatIndex == null) return null;
-              const cat = latest.category || heatCategory(latest.heatIndex);
-              return (
-                <article className="v1-card wx-station-card" key={st.id}>
-                  <div className="wx-station-hd">
-                    <div>
-                      <h3>{st.loc}</h3>
-                      <p className="sub">
-                        {st.project} · {st.id} · {latest.hour}:00{" "}
-                        {latest.isToday ? "today" : fmtDate(latest.dateIso)}
-                      </p>
+            {stationCards.length === 0 ? (
+              <p className="muted wx-dash-empty">
+                No hourly readings logged today. Station cards appear after the hourly log is filled —
+                each card shows that station&apos;s highest readings for the day.
+              </p>
+            ) : (
+              stationCards.map((card) => {
+                const cat = card.category;
+                return (
+                  <article className="v1-card wx-station-card" key={card.station.id}>
+                    <div className="wx-station-hd">
+                      <div>
+                        <h3>{card.station.loc}</h3>
+                        <p className="sub">
+                          {card.station.project} · {card.station.id} · highest today
+                          {card.peakHour != null ? ` · peak HI at ${card.peakHour}:00` : ""}
+                        </p>
+                      </div>
+                      <span className={`hicat c${cat.level}`}>{cat.name}</span>
                     </div>
-                    <span className={`hicat c${cat.level}`}>{cat.name}</span>
-                  </div>
-                  <div className="wx-station-body">
-                    <div>
-                      <small className="muted">Heat index</small>
-                      <div className="wx-hi" style={{ color: hiColor(cat.level) }}>
-                        {latest.heatIndex}°
+                    <div className="wx-station-body">
+                      <div>
+                        <small className="muted">Heat index</small>
+                        <div className="wx-hi" style={{ color: hiColor(cat.level) }}>
+                          {card.heatIndex}°
+                        </div>
+                      </div>
+                      <div className="wx-station-metrics">
+                        <div>
+                          <small>Temp</small>
+                          <b>{card.temp}°C</b>
+                        </div>
+                        <div>
+                          <small>RH</small>
+                          <b>{card.rh}%</b>
+                        </div>
+                        <div>
+                          <small>Wind</small>
+                          <b>{card.wind}</b> m/s
+                        </div>
+                        <div>
+                          <small>PM2.5</small>
+                          <b>{card.pm25}</b>
+                        </div>
                       </div>
                     </div>
-                    <div className="wx-station-metrics">
-                      <div>
-                        <small>Temp</small>
-                        <b>{latest.temp}°C</b>
-                      </div>
-                      <div>
-                        <small>RH</small>
-                        <b>{latest.rh}%</b>
-                      </div>
-                      <div>
-                        <small>Wind</small>
-                        <b>{latest.wind}</b> m/s
-                      </div>
-                      <div>
-                        <small>PM2.5</small>
-                        <b>{latest.pm25}</b>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="wx-station-note">{cat.prevention}</div>
-                </article>
-              );
-            })}
+                    <div className="wx-station-note">{cat.prevention}</div>
+                  </article>
+                );
+              })
+            )}
           </div>
 
           <div className="v1-grid g3">
@@ -1347,25 +1481,31 @@ export function WeatherScreen() {
               <h3>Air quality</h3>
               <p className="sub">Highest PM2.5 and PM10 per station in the period</p>
               <GroupedBarChart
-                labels={stations.map((s) => s.loc)}
+                labels={stations
+                  .filter((s) => days.some((d) => d.station.id === s.id))
+                  .map((s) => s.loc)}
                 series={[
                   {
                     label: "PM2.5",
                     color: "#8B8A8F",
-                    values: stations.map((s) =>
-                      days
-                        .filter((d) => d.station.id === s.id)
-                        .reduce((a, d) => Math.max(a, d.pm25), 0),
-                    ),
+                    values: stations
+                      .filter((s) => days.some((d) => d.station.id === s.id))
+                      .map((s) =>
+                        days
+                          .filter((d) => d.station.id === s.id)
+                          .reduce((a, d) => Math.max(a, d.pm25), 0),
+                      ),
                   },
                   {
                     label: "PM10",
                     color: "#A67C52",
-                    values: stations.map((s) =>
-                      days
-                        .filter((d) => d.station.id === s.id)
-                        .reduce((a, d) => Math.max(a, d.pm10), 0),
-                    ),
+                    values: stations
+                      .filter((s) => days.some((d) => d.station.id === s.id))
+                      .map((s) =>
+                        days
+                          .filter((d) => d.station.id === s.id)
+                          .reduce((a, d) => Math.max(a, d.pm10), 0),
+                      ),
                   },
                 ]}
                 height={250}
@@ -1407,22 +1547,30 @@ export function WeatherScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {observations.map((d) => (
-                    <tr key={`${d.station.id}-${d.dateIso}`}>
-                      <td className="mono">{fmtDate(d.t)}</td>
-                      <td>{d.station.project}</td>
-                      <td>{d.station.loc}</td>
-                      <td className="n mono">{d.RH}</td>
-                      <td className="n mono">{d.T}</td>
-                      <td className="n mono">
-                        <b>{d.hi}</b>
+                  {observations.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="muted">
+                        No logged readings in this period yet.
                       </td>
-                      <td>
-                        <span className={`hicat c${d.category.level}`}>{d.category.name}</span>
-                      </td>
-                      <td className="muted wx-prev">{d.category.prevention}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    observations.map((d) => (
+                      <tr key={`${d.station.id}-${d.dateIso}`}>
+                        <td className="mono">{fmtDate(d.t)}</td>
+                        <td>{d.station.project}</td>
+                        <td>{d.station.loc}</td>
+                        <td className="n mono">{d.RH}</td>
+                        <td className="n mono">{d.T}</td>
+                        <td className="n mono">
+                          <b>{d.hi}</b>
+                        </td>
+                        <td>
+                          <span className={`hicat c${d.category.level}`}>{d.category.name}</span>
+                        </td>
+                        <td className="muted wx-prev">{d.category.prevention}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1528,6 +1676,7 @@ export function WeatherScreen() {
                       <th>Heat index</th>
                       <th>Category</th>
                       <th>Remarks</th>
+                      <th>Logged by</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1536,11 +1685,26 @@ export function WeatherScreen() {
                       const upcoming = row.status === "upcoming";
                       const current =
                         isLogToday && hour === now.getHours() && !upcoming;
+                      const currentUser =
+                        formatUserLabel(user) || user?.username || "";
+                      const hasReading =
+                        row.status === "ok" &&
+                        [
+                          row.wind,
+                          row.temp,
+                          row.rh,
+                          row.co2,
+                          row.pm25,
+                          row.pm10,
+                          row.heatIndex,
+                          row.remarks,
+                        ].some((v) => v != null && String(v).trim() !== "");
+                      const loggedByDisplay = row.loggedBy || (hasReading ? currentUser : "");
                       return (
                         <tr key={hour} className={current ? "is-current" : undefined}>
                           <td className="wx-time">{row.timeLabel}</td>
                           {upcoming ? (
-                            <td colSpan={9} className="muted">
+                            <td colSpan={10} className="muted">
                               Upcoming
                             </td>
                           ) : (
@@ -1588,6 +1752,20 @@ export function WeatherScreen() {
                                       remarks: e.target.value,
                                       status: "ok",
                                     })
+                                  }
+                                />
+                              </td>
+                              <td className="wx-logged-by">
+                                <input
+                                  value={loggedByDisplay}
+                                  readOnly
+                                  aria-readonly="true"
+                                  title={
+                                    row.loggedBy
+                                      ? `Saved by ${row.loggedBy}`
+                                      : hasReading
+                                        ? "Will save as you when you click Save readings"
+                                        : undefined
                                   }
                                 />
                               </td>
@@ -1691,9 +1869,13 @@ export function WeatherScreen() {
           remarks={submitRemarks}
           onRemarks={setSubmitRemarks}
           projects={accessProjects}
-          weekOptions={weekOptions}
+          weekOptions={submitWeekOptions}
           onProjectChange={setSubmitProject}
-          onWeekChange={setSubmitWeekStart}
+          onWeekChange={(weekStartIso) => {
+            if (submitWeekOptions.some((w) => w.startIso === weekStartIso)) {
+              setSubmitWeekStart(weekStartIso);
+            }
+          }}
           onClose={() => setSubmitOpen(false)}
           onSubmit={() => {
             if (!submitting || submittingBusy) return;

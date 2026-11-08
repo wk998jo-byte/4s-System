@@ -12,6 +12,7 @@ import {
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
+import { safelifeStatusOf } from "../lib/integSettings";
 import { RiskPill, StatusPill, useSignedInName } from "./shared";
 
 const MON3 = [
@@ -218,6 +219,7 @@ export function AiCameraRecordDrawer({
   const [closeout, setCloseout] = useState({
     hseo_name_badge: "",
     close_out_action: "",
+    safelife_reference: "",
   });
   const [closeOutFile, setCloseOutFile] = useState<File | null>(null);
 
@@ -274,7 +276,7 @@ export function AiCameraRecordDrawer({
           snapUri("close", row),
       });
     }
-    if (row.fields?.safelife_update && row.status !== "open") {
+    if (safelifeStatusOf(row) === "Updated") {
       list.push({
         title: "SafeLife entry",
         meta: field(row, "safelife_ref") || "Updated",
@@ -388,11 +390,13 @@ export function AiCameraRecordDrawer({
       const uploaded = await uploadImage(closeOutFile);
       setRow(
         await closeOutAiCamera(row.id, {
-          ...closeout,
+          hseo_name_badge: closeout.hseo_name_badge,
+          close_out_action: closeout.close_out_action,
           close_out_picture: uploaded.url,
+          safelife_reference: closeout.safelife_reference.trim() || null,
         }),
       );
-      setCloseout({ hseo_name_badge: "", close_out_action: "" });
+      setCloseout({ hseo_name_badge: "", close_out_action: "", safelife_reference: "" });
       setCloseOutFile(null);
       onChanged();
       notifyCasesChanged();
@@ -632,6 +636,25 @@ export function AiCameraRecordDrawer({
                               </span>
                             </span>
                           </label>
+                          {safelifeStatusOf(row) !== "Updated" ? (
+                            <label className="fld-ctl">
+                              <span className="lbl">SafeLife reference number</span>
+                              <input
+                                placeholder="Optional — SL-000000"
+                                value={closeout.safelife_reference}
+                                onChange={(e) =>
+                                  setCloseout({
+                                    ...closeout,
+                                    safelife_reference: e.target.value,
+                                  })
+                                }
+                              />
+                              <span className="field-note">
+                                Optional. If filled, SafeLife status becomes Updated; otherwise it
+                                stays Pending until Admin closes the record (Not required).
+                              </span>
+                            </label>
+                          ) : null}
                           <button className="btn primary" type="submit" disabled={busy}>
                             {busy ? "Saving…" : "Submit close-out"}
                           </button>
@@ -665,17 +688,30 @@ export function AiCameraRecordDrawer({
                     <h3>
                       <span className="logo-chip sl">SafeLife</span> Update
                     </h3>
-                    {row.fields?.safelife_update ? (
-                      <div className="note green">
-                        Updated in SafeLife · reference{" "}
-                        <b className="mono">{field(row, "safelife_ref") || "—"}</b>
-                      </div>
-                    ) : (
-                      <div className="note">
-                        SafeLife entry is completed by the HSEO at the site when registration does
-                        not include a SafeLife reference.
-                      </div>
-                    )}
+                    {(() => {
+                      const sl = safelifeStatusOf(row);
+                      if (sl === "Updated") {
+                        return (
+                          <div className="note green">
+                            Updated in SafeLife · reference{" "}
+                            <b className="mono">{field(row, "safelife_ref") || "—"}</b>
+                          </div>
+                        );
+                      }
+                      if (sl === "Pending") {
+                        return (
+                          <div className="note amber">
+                            Pending — can be completed with an optional SafeLife reference at
+                            close-out. If Admin closes without one, status becomes Not required.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="note">
+                          Not required — record closed without a SafeLife entry.
+                        </div>
+                      );
+                    })()}
                   </section>
 
                   <section className="v1-card">

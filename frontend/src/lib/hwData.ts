@@ -125,6 +125,30 @@ export const HW_STATUS_COLORS: Record<HwStatus, string> = {
   Lost: "#2a2a2a",
 };
 
+export const HW_STATUSES = Object.keys(HW_STATUS_COLORS) as HwStatus[];
+
+/** "Assigned" is only valid for wearable devices. */
+export const HW_WEARABLE_DEVICES: ReadonlySet<string> = new Set([
+  "Smart Helmet",
+  "Smart Watch",
+]);
+
+export function isHwWearableDevice(device: string): boolean {
+  return HW_WEARABLE_DEVICES.has(device);
+}
+
+/** Status choices for add/change: wearables get all; other devices exclude Assigned. */
+export function hwStatusesForDevice(device: string): HwStatus[] {
+  if (isHwWearableDevice(device)) return [...HW_STATUSES];
+  return HW_STATUSES.filter((s) => s !== "Assigned");
+}
+
+export function coerceHwStatusForDevice(device: string, status: string): HwStatus {
+  const allowed = hwStatusesForDevice(device);
+  if (allowed.includes(status as HwStatus)) return status as HwStatus;
+  return "In Stock";
+}
+
 function mulberry(seed: number) {
   let t = seed >>> 0;
   return () => {
@@ -170,8 +194,17 @@ export function hwTotalDevices() {
   return HW_DEVICE_META.reduce((s, d) => s + d.total, 0);
 }
 
-export function splitByStatus(total: number): Record<HwStatus, number> {
-  const entries = Object.entries(STATUS_SHARE) as Array<[HwStatus, number]>;
+export function splitByStatus(
+  total: number,
+  allowAssigned = true,
+): Record<HwStatus, number> {
+  // Non-wearables never use Assigned — fold that share into Installed.
+  const shares: Record<HwStatus, number> = { ...STATUS_SHARE };
+  if (!allowAssigned) {
+    shares.Installed = STATUS_SHARE.Installed + STATUS_SHARE.Assigned;
+    shares.Assigned = 0;
+  }
+  const entries = Object.entries(shares) as Array<[HwStatus, number]>;
   const out = {} as Record<HwStatus, number>;
   let used = 0;
   entries.forEach(([status, share], i) => {
@@ -184,6 +217,17 @@ export function splitByStatus(total: number): Record<HwStatus, number> {
     }
   });
   return out;
+}
+
+function emptyStatusCounts(): Record<HwStatus, number> {
+  return {
+    Installed: 0,
+    Assigned: 0,
+    "In Stock": 0,
+    "Under Maintenance": 0,
+    Damaged: 0,
+    Lost: 0,
+  };
 }
 
 export function projectDeviceMatrix(projects: string[]) {
@@ -209,16 +253,17 @@ export function projectDeviceMatrix(projects: string[]) {
 }
 
 export function statusByProject(projects: string[]) {
-  const total = hwTotalDevices();
+  const matrix = projectDeviceMatrix(projects);
   const out: Record<string, Record<HwStatus, number>> = {};
-  let used = 0;
-  projects.forEach((project, i) => {
-    const share = PROJECT_SHARE[project] ?? 1 / Math.max(projects.length, 1);
-    const n =
-      i === projects.length - 1 ? Math.max(0, total - used) : Math.round(total * share);
-    used += i === projects.length - 1 ? 0 : n;
-    out[project] = splitByStatus(n);
-  });
+  for (const project of projects) {
+    const acc = emptyStatusCounts();
+    for (const meta of HW_DEVICE_META) {
+      const n = matrix[project]?.[meta.device] || 0;
+      const st = splitByStatus(n, isHwWearableDevice(meta.device));
+      for (const status of HW_STATUSES) acc[status] += st[status];
+    }
+    out[project] = acc;
+  }
   return out;
 }
 
@@ -228,14 +273,14 @@ export function buildDeviceRegister(
   now = new Date(),
 ): HwDevice[] {
   const rows: HwDevice[] = [];
-  const statuses = Object.keys(STATUS_SHARE) as HwStatus[];
   let n = 0;
   for (const meta of HW_DEVICE_META) {
     for (let i = 0; i < Math.min(8, meta.total); i += 1) {
       if (rows.length >= limit) return rows;
       const rnd = mulberry(hashSeed(meta.device, i, "reg"));
       const project = projects[Math.floor(rnd() * projects.length)] || projects[0] || "Jafurah";
-      const status = statuses[Math.floor(rnd() * statuses.length)];
+      const pool = hwStatusesForDevice(meta.device);
+      const status = pool[Math.floor(rnd() * pool.length)] || "In Stock";
       const day = new Date(now);
       day.setDate(now.getDate() - Math.floor(rnd() * 40));
       const online = status === "Installed" || status === "Assigned" ? rnd() > 0.35 : false;
@@ -408,7 +453,7 @@ export function healthByType(projects: string[]) {
   const matrix = projectDeviceMatrix(projects);
   return HW_DEVICE_META.map((meta) => {
     const total = projects.reduce((s, p) => s + (matrix[p]?.[meta.device] || 0), 0) || meta.total;
-    const st = splitByStatus(total);
+    const st = splitByStatus(total, isHwWearableDevice(meta.device));
     const inService = st.Installed + st.Assigned;
     return {
       device: meta.device,

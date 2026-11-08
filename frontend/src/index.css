@@ -5018,6 +5018,7 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .weather-v1{display:flex;flex-direction:column;gap:14px}
 .weather-v1 .wx-tabs{margin-top:2px}
 .wx-station-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.wx-dash-empty{grid-column:1/-1;margin:0;padding:18px 14px;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2);font-size:13px;line-height:1.45}
 .wx-station-card{display:flex;flex-direction:column;gap:10px;padding:14px 14px 12px}
 .wx-station-hd{display:flex;align-items:flex-start;gap:10px}
 .wx-station-hd h3{margin:0;font-size:16px;font-weight:800}
@@ -5059,6 +5060,8 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .wx-log-card .wx-log-hd,.v1-card > .wx-log-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
 .wx-log-hd h3{margin:0;font-size:16px;font-weight:800}
 .wx-log-hd .sub{margin:2px 0 0;font-size:12.5px;color:var(--muted)}
+.weather-table.wx-hourly-edit .wx-logged-by{min-width:140px}
+.weather-table.wx-hourly-edit .wx-logged-by input{background:var(--surface-2);color:var(--ink-2);cursor:default}
 .wx-hourly-edit tr.is-current td{background:color-mix(in srgb,var(--amber,#f0a04b) 10%,transparent)}
 .drawer.drawer-page.wx-weekly-drawer,
 .drawer.drawer-record.wx-weekly-drawer,

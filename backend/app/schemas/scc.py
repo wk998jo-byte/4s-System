@@ -138,6 +138,7 @@ class AiCameraCloseOut(BaseModel):
     hseo_name_badge: str = Field(..., min_length=1, max_length=200)
     close_out_action: str = Field(..., min_length=1, max_length=4000)
     close_out_picture: str = Field(..., min_length=1, max_length=500)
+    safelife_reference: str | None = Field(default=None, max_length=80)
 
 
 class ConfirmDriver(BaseModel):
@@ -217,6 +218,7 @@ class WeatherHourlyCellIn(BaseModel):
     heat_index: float | None = None
     remarks: str | None = None
     status: str = "ok"
+    logged_by: str | None = Field(default=None, max_length=120)
 
 
 class WeatherHourlySaveIn(BaseModel):

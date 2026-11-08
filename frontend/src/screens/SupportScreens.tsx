@@ -1155,6 +1155,7 @@ function ReviewCloseOut({
     hseo_name_badge: "",
     close_out_action: "",
     close_out_picture: "",
+    safelife_reference: "",
     itqan_proof: "",
     alarm: "" as "" | "False Alarm" | "True Alarm",
     worker_picture: "",
@@ -1211,6 +1212,7 @@ function ReviewCloseOut({
               hseo_name_badge: form.hseo_name_badge,
               close_out_action: form.close_out_action,
               close_out_picture: form.close_out_picture,
+              safelife_reference: form.safelife_reference.trim() || null,
             });
       onDone(asCaseDetail(updated));
       notifyCasesChanged();
@@ -1380,6 +1382,19 @@ function ReviewCloseOut({
               <span>
                 {form.close_out_picture || "Image of the corrective action"}
               </span>
+            </span>
+          </label>
+          <label>
+            SafeLife reference number
+            <input
+              placeholder="Optional — SL-000000"
+              value={form.safelife_reference}
+              onChange={(event) =>
+                setForm({ ...form, safelife_reference: event.target.value })
+              }
+            />
+            <span className="field-note">
+              Optional. Fills SafeLife as Updated; leave blank to keep Pending until Admin closes.
             </span>
           </label>
         </>

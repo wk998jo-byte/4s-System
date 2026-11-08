@@ -31,14 +31,15 @@ import {
   fmtHwDateTime,
   fmtN,
   healthByType,
+  coerceHwStatusForDevice,
   HW_DEVICE_META,
   HW_PROJECTS,
   HW_STATUS_COLORS,
+  hwStatusesForDevice,
   hwTotalDevices,
   installedTrend,
   mergeTransfers,
   projectDeviceMatrix,
-  splitByStatus,
   statusByProject,
   type HwDevice,
   type HwDeviceType,
@@ -154,12 +155,13 @@ function HwExcelBtns({
 function asHwDevices(items: HwRegisterItem[], fallbackNow: Date): HwDevice[] {
   return items.map((item, index) => {
     const meta = HW_DEVICE_META.find((d) => d.device === item.device);
+    const device = (item.device as HwDeviceType) || "AI Camera";
     return {
       id: item.id || `DEV-${item.serial || index}`,
-      device: (item.device as HwDeviceType) || "AI Camera",
+      device,
       system: (item.system as HwDevice["system"]) || meta?.system || "4S",
       serial: item.serial,
-      status: (item.status as HwStatus) || "In Stock",
+      status: coerceHwStatusForDevice(device, item.status || "In Stock"),
       project: item.project,
       lastSignal: item.lastSignal ?? null,
       updatedIso: item.updatedIso || fallbackNow.toISOString(),
@@ -700,24 +702,30 @@ export function HwScreen() {
     return out;
   }, [matrix, scopedProjects]);
 
+  const byStatus = useMemo(() => statusByProject(scopedProjects), [scopedProjects]);
+  const health = useMemo(() => healthByType(scopedProjects), [scopedProjects]);
+
   const totals = useMemo(() => {
     const all =
       Object.values(typeTotals).reduce((s, n) => s + n, 0) || hwTotalDevices();
-    const st = splitByStatus(all);
+    // Sample totals: Assigned only from wearables (same rule as health-by-type).
+    const installed = health.reduce((s, row) => s + row.installed, 0);
+    const assigned = health.reduce((s, row) => s + row.assigned, 0);
+    const inStock = health.reduce((s, row) => s + row.inStock, 0);
+    const maint = health.reduce((s, row) => s + row.maint, 0);
+    const damaged = health.reduce((s, row) => s + row.damaged, 0);
+    const lost = health.reduce((s, row) => s + row.lost, 0);
     return {
       all,
-      installed: st.Installed,
-      assigned: st.Assigned,
-      inStock: st["In Stock"],
-      maint: st["Under Maintenance"],
-      damaged: st.Damaged,
-      lost: st.Lost,
-      out: st["Under Maintenance"] + st.Damaged + st.Lost,
+      installed,
+      assigned,
+      inStock,
+      maint,
+      damaged,
+      lost,
+      out: maint + damaged + lost,
     };
-  }, [typeTotals]);
-
-  const byStatus = useMemo(() => statusByProject(scopedProjects), [scopedProjects]);
-  const health = useMemo(() => healthByType(scopedProjects), [scopedProjects]);
+  }, [typeTotals, health]);
   const attention = useMemo(() => damagedLostByProject(scopedProjects), [scopedProjects]);
   const trend = useMemo(() => installedTrend(now), [now]);
   const liveLabel = useMemo(() => {
@@ -879,7 +887,7 @@ export function HwScreen() {
       device: addForm.device as HwDevice["device"],
       system: meta?.system || "4S",
       serial: addForm.serial.trim(),
-      status: addForm.status,
+      status: coerceHwStatusForDevice(addForm.device, addForm.status),
       project: addForm.project,
       lastSignal: null,
       updatedIso: now.toISOString(),
@@ -974,7 +982,18 @@ export function HwScreen() {
 
   const donutParts = (Object.keys(HW_STATUS_COLORS) as HwStatus[]).map((st) => ({
     label: st,
-    value: splitByStatus(totals.all)[st],
+    value:
+      st === "Installed"
+        ? totals.installed
+        : st === "Assigned"
+          ? totals.assigned
+          : st === "In Stock"
+            ? totals.inStock
+            : st === "Under Maintenance"
+              ? totals.maint
+              : st === "Damaged"
+                ? totals.damaged
+                : totals.lost,
     color: HW_STATUS_COLORS[st],
   }));
 
@@ -1622,7 +1641,14 @@ export function HwScreen() {
               Device
               <select
                 value={addForm.device}
-                onChange={(e) => setAddForm((f) => ({ ...f, device: e.target.value }))}
+                onChange={(e) => {
+                  const device = e.target.value;
+                  setAddForm((f) => ({
+                    ...f,
+                    device,
+                    status: coerceHwStatusForDevice(device, f.status),
+                  }));
+                }}
               >
                 {HW_DEVICE_META.map((d) => (
                   <option key={d.device}>{d.device}</option>
@@ -1640,12 +1666,12 @@ export function HwScreen() {
             <label>
               Status
               <select
-                value={addForm.status}
+                value={coerceHwStatusForDevice(addForm.device, addForm.status)}
                 onChange={(e) =>
                   setAddForm((f) => ({ ...f, status: e.target.value as HwStatus }))
                 }
               >
-                {(Object.keys(HW_STATUS_COLORS) as HwStatus[]).map((s) => (
+                {hwStatusesForDevice(addForm.device).map((s) => (
                   <option key={s}>{s}</option>
                 ))}
               </select>
@@ -1908,9 +1934,12 @@ export function HwScreen() {
           <label className="hw-field">
             Status
             <select
-              value={statusEdit.status}
+              value={coerceHwStatusForDevice(statusEdit.device, statusEdit.status)}
               onChange={(e) => {
-                const status = e.target.value as HwStatus;
+                const status = coerceHwStatusForDevice(
+                  statusEdit.device,
+                  e.target.value,
+                );
                 setRegister((rows) =>
                   rows.map((r) =>
                     r.id === statusEdit.id
@@ -1920,7 +1949,7 @@ export function HwScreen() {
                 );
               }}
             >
-              {(Object.keys(HW_STATUS_COLORS) as HwStatus[]).map((s) => (
+              {hwStatusesForDevice(statusEdit.device).map((s) => (
                 <option key={s}>{s}</option>
               ))}
             </select>
