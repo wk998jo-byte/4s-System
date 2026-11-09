@@ -1112,7 +1112,7 @@ export function AdminScreen() {
                 [
                   "itqanDefault",
                   "Default answer: Upload to ITQAN",
-                  "When Yes, the ITQAN proof image is required. Uploaded violations are added to the ITQAN log.",
+                  "When Yes, the ITQAN proof image is required. When No, the operator types a free-text reason. Uploaded violations are added to the ITQAN log.",
                 ],
               ] as const
             ).map(([key, title, sub]) => (

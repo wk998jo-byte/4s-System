@@ -32,13 +32,6 @@ export function safelifeStatusOf(row: {
   return "Pending";
 }
 
-export const ITQAN_SKIP_REASONS = [
-  "Internal warning only, first offence",
-  "Driver could not be identified from footage",
-  "Duplicate of an existing ITQAN entry",
-  "Third-party vehicle, not under BQ payroll",
-] as const;
-
 function parseInteg(data: Record<string, unknown> | null | undefined): IntegSettings {
   return {
     safelifeAsk: data?.safelifeAsk !== false,

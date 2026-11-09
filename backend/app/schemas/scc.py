@@ -91,7 +91,7 @@ class DashcamCreate(BaseModel):
     reported_by: str = Field(..., min_length=1, max_length=120)
     violation_picture: str | None = Field(default=None, max_length=500)
     upload_to_itqan: bool = True
-    itqan_skip_reason: str | None = Field(default=None, max_length=200)
+    itqan_skip_reason: str | None = Field(default=None, max_length=500)
 
 
 class SpeedCreate(BaseModel):
@@ -114,7 +114,7 @@ class SpeedCreate(BaseModel):
     reported_by: str = Field(..., min_length=1, max_length=120)
     fms_evidence: str | None = Field(default=None, max_length=260)
     upload_to_itqan: bool = True
-    itqan_skip_reason: str | None = Field(default=None, max_length=200)
+    itqan_skip_reason: str | None = Field(default=None, max_length=500)
 
 
 class SosCreate(BaseModel):
@@ -145,7 +145,7 @@ class ConfirmDriver(BaseModel):
     uploaded_by: str = Field(..., min_length=1, max_length=120)
     upload_to_itqan: bool | None = None
     itqan_proof: str | None = Field(default=None, max_length=260)
-    itqan_skip_reason: str | None = Field(default=None, max_length=200)
+    itqan_skip_reason: str | None = Field(default=None, max_length=500)
 
 
 class ItqanCreate(BaseModel):

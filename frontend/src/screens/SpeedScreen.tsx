@@ -19,7 +19,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
-import { ITQAN_SKIP_REASONS, useIntegSettings } from "../lib/integSettings";
+import { useIntegSettings } from "../lib/integSettings";
 import { href } from "../lib/routing";
 import {
   rowAllowedForProjects,
@@ -1693,18 +1693,14 @@ function SpeedNewDrawer({
                       <span className="lbl">
                         Reason for not uploading to ITQAN <span className="req">*</span>
                       </span>
-                      <select
+                      <textarea
                         required
+                        rows={3}
+                        maxLength={500}
+                        placeholder="Type the reason"
                         value={itqanSkipReason}
                         onChange={(e) => setItqanSkipReason(e.target.value)}
-                      >
-                        <option value="">Select</option>
-                        {ITQAN_SKIP_REASONS.map((reason) => (
-                          <option key={reason} value={reason}>
-                            {reason}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
                   </div>
                 ) : null}
