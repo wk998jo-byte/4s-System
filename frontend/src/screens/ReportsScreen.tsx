@@ -5,7 +5,6 @@ import {
   fetchWeatherHourly,
   fetchWeatherWeeklyLogs,
   fetchWeatherWeeklyPreview,
-  issueReport,
   openNotificationsPanel,
   resolveMediaUrl,
   signReport,
@@ -328,14 +327,6 @@ function DownloadIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
       <path d="M12 3v12M8 11l4 4 4-4M5 21h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IssueIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -1571,7 +1562,6 @@ export function ReportsScreen() {
   const [data, setData] = useState<ReportsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<ReportTab>("daily");
-  const [acting, setActing] = useState(false);
   const [viewing, setViewing] = useState<BuiltReport | null>(null);
   const [signingReportId, setSigningReportId] = useState<string | null>(null);
   const [viewingWeather, setViewingWeather] = useState<WeeklyWeatherLog | null>(null);
@@ -1888,38 +1878,6 @@ export function ReportsScreen() {
                             }}
                           >
                             Sign
-                          </button>
-                        ) : null}
-                        {row.kind === "monthly" &&
-                        /ready/i.test(row.status) &&
-                        user?.capabilities.issue_reports ? (
-                          <button
-                            type="button"
-                            className="btn sm primary"
-                            disabled={acting}
-                            title="Email PDF + Excel to the Project PM (no need to open the report)"
-                            onClick={() => {
-                              setActing(true);
-                              issueReport(row.id)
-                                .then((packet) => {
-                                  const delivery =
-                                    packet.delivery || packet.issued?.delivery;
-                                  const msg =
-                                    delivery?.mode === "smtp"
-                                      ? `Issued and emailed to ${delivery.to || "Project PM"}.`
-                                      : delivery?.message ||
-                                        (delivery?.to
-                                          ? `Issued for ${delivery.to}.`
-                                          : "Issued");
-                                  setError(null);
-                                  window.alert(msg);
-                                  return loadReports();
-                                })
-                                .catch((err) => setError(errorMessage(err)))
-                                .finally(() => setActing(false));
-                            }}
-                          >
-                            {acting ? "Issuing…" : "Issue"}
                           </button>
                         ) : null}
                       </div>

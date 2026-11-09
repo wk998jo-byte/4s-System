@@ -246,7 +246,9 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   dailyAt: "23:59",
   weeklyDay: "Saturday",
   monthlyDay: 1,
-  reportTestEmail: "",
+  reportTestEmail: "rose.subait@binquraya.com",
+  reportHseEmail: "",
+  reportHseName: "Dept HSE",
   reportDistribution: {
     Jafurah: { name: "[PM name], Jafurah Project", email: "" },
     MGS: { name: "[PM name], MGS Project", email: "" },

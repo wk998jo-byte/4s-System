@@ -3188,8 +3188,10 @@ class PlatformStore:
             "weeklyDay": "Saturday",
             "monthlyDay": 1,
             # Editable in Administration → Report schedule. Test email overrides
-            # every project's PM inbox so you can verify delivery on one address.
-            "reportTestEmail": "",
+            # HSE + PM inboxes so you can verify delivery on one address.
+            "reportTestEmail": "rose.subait@binquraya.com",
+            "reportHseEmail": "",
+            "reportHseName": "Dept HSE",
             "reportDistribution": {
                 "Jafurah": {
                     "name": "[PM name], Jafurah Project",
@@ -3959,6 +3961,10 @@ class PlatformStore:
             next_value["reportDistribution"] = merged_dist
         if "reportTestEmail" in (payload or {}):
             next_value["reportTestEmail"] = str(payload.get("reportTestEmail") or "").strip()
+        if "reportHseEmail" in (payload or {}):
+            next_value["reportHseEmail"] = str(payload.get("reportHseEmail") or "").strip()
+        if "reportHseName" in (payload or {}):
+            next_value["reportHseName"] = str(payload.get("reportHseName") or "Dept HSE").strip()
         with self._lock, self._sessions() as session:
             row = session.get(AppStateRow, "platform_settings")
             if row:
@@ -4072,6 +4078,10 @@ class PlatformStore:
         )
 
         packets = other + rebuilt_daily + rebuilt_weekly + rebuilt_monthly
+        packets = self._dispatch_compile_notifications(packets)
+        for item in packets:
+            if isinstance(item, dict):
+                item.pop("_prev_status", None)
         self._save_report_packets(packets)
         return packets
 
@@ -4175,6 +4185,9 @@ class PlatformStore:
                 # Signed stays signed; otherwise follow the schedule even with 0 cases.
                 if signed or str(prev.get("status") or "") == "Signed":
                     status = "Signed"
+                compile_notified_at = prev.get("compile_notified_at")
+                if not finalized:
+                    compile_notified_at = None
                 item = {
                     "id": report_id,
                     "kind": "weekly",
@@ -4186,6 +4199,8 @@ class PlatformStore:
                     "signed": signed,
                     "issued": prev.get("issued"),
                     "generated_at": prev.get("generated_at") or generated_at,
+                    "compile_notified_at": compile_notified_at,
+                    "_prev_status": str(prev.get("status") or ""),
                 }
                 rebuilt.append(item)
         return rebuilt
@@ -4278,6 +4293,9 @@ class PlatformStore:
                         0,
                         tzinfo=AST,
                     ).isoformat()
+                compile_notified_at = prev.get("compile_notified_at")
+                if not finalized:
+                    compile_notified_at = None
                 item = {
                     "id": report_id,
                     "kind": "monthly",
@@ -4290,9 +4308,143 @@ class PlatformStore:
                     "pm_signed": pm_signed,
                     "issued": issued,
                     "generated_at": generated_at,
+                    "compile_notified_at": compile_notified_at,
+                    "_prev_status": str(prev.get("status") or ""),
                 }
                 rebuilt.append(item)
         return rebuilt
+
+    def _hse_notify_inbox(self) -> dict | None:
+        """Dept HSE inbox for compile notices (test override wins)."""
+        settings = self.get_platform_settings()
+        test = str(settings.get("reportTestEmail") or "").strip()
+        name = str(settings.get("reportHseName") or "Dept HSE").strip() or "Dept HSE"
+        email = test or str(settings.get("reportHseEmail") or "").strip()
+        if not email:
+            return None
+        return {"name": name, "email": email}
+
+    def _pm_notify_inbox(self, scope: str) -> dict | None:
+        """Project PM inbox for that scope (test override wins)."""
+        settings = self.get_platform_settings()
+        test = str(settings.get("reportTestEmail") or "").strip()
+        dist = self.resolve_monthly_distribution(scope)
+        name = str(dist.get("name") or f"[PM name], {scope} Project")
+        # resolve_monthly_distribution already applies test override to email.
+        email = str(dist.get("email") or "").strip() or test
+        if not email:
+            return None
+        return {"name": name, "email": email}
+
+    def _dispatch_compile_notifications(self, packets: list[dict]) -> list[dict]:
+        """Email when weekly/monthly packets first become awaiting signature.
+
+        - Weekly: one HSE email covering all newly compiled weekly packs.
+        - Monthly: one HSE email for all new packs + one PM email per project.
+        """
+        from app.services.report_mail import send_report_ready_notice
+
+        newly_weekly: list[dict] = []
+        newly_monthly: list[dict] = []
+        for item in packets:
+            kind = item.get("kind")
+            if kind not in {"weekly", "monthly"}:
+                item.pop("_prev_status", None)
+                continue
+            status = str(item.get("status") or "")
+            prev_status = str(item.pop("_prev_status", "") or "")
+            awaiting = status.startswith("Awaiting")
+            newly = awaiting and prev_status in {"", "Compiling"}
+            if not newly or item.get("compile_notified_at"):
+                continue
+            if kind == "weekly":
+                newly_weekly.append(item)
+            else:
+                newly_monthly.append(item)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        def mark(items: list[dict], deliveries: list[dict]) -> None:
+            for item in items:
+                item["compile_notified_at"] = now_iso
+                item["compile_notify"] = {"at": now_iso, "deliveries": deliveries}
+
+        # --- Weekly: single HSE digest ---
+        if newly_weekly:
+            hse = self._hse_notify_inbox()
+            if hse:
+                try:
+                    delivery = send_report_ready_notice(
+                        to_email=hse["email"],
+                        to_name=hse["name"],
+                        kind="weekly",
+                        role_hint="Dept HSE",
+                        reports=[
+                            {
+                                "id": p.get("id"),
+                                "scope": p.get("scope"),
+                                "label": p.get("label"),
+                            }
+                            for p in newly_weekly
+                        ],
+                    )
+                    mark(newly_weekly, [delivery])
+                except Exception:
+                    pass
+
+        # --- Monthly: one HSE digest + one PM email per project ---
+        if newly_monthly:
+            hse = self._hse_notify_inbox()
+            hse_delivery = None
+            if hse:
+                try:
+                    hse_delivery = send_report_ready_notice(
+                        to_email=hse["email"],
+                        to_name=hse["name"],
+                        kind="monthly",
+                        role_hint="Dept HSE",
+                        reports=[
+                            {
+                                "id": p.get("id"),
+                                "scope": p.get("scope"),
+                                "label": p.get("label"),
+                            }
+                            for p in newly_monthly
+                        ],
+                    )
+                except Exception:
+                    hse_delivery = None
+
+            for item in newly_monthly:
+                deliveries: list[dict] = []
+                if hse_delivery:
+                    deliveries.append(hse_delivery)
+                pm = self._pm_notify_inbox(str(item.get("scope") or ""))
+                if pm:
+                    try:
+                        deliveries.append(
+                            send_report_ready_notice(
+                                to_email=pm["email"],
+                                to_name=pm["name"],
+                                kind="monthly",
+                                role_hint="Project PM",
+                                reports=[
+                                    {
+                                        "id": item.get("id"),
+                                        "scope": item.get("scope"),
+                                        "label": item.get("label"),
+                                    }
+                                ],
+                            )
+                        )
+                    except Exception:
+                        pass
+                # Mark notified if at least HSE digest or this project's PM mail went out.
+                if deliveries:
+                    item["compile_notified_at"] = now_iso
+                    item["compile_notify"] = {"at": now_iso, "deliveries": deliveries}
+
+        return packets
 
     def _save_report_packets(self, packets: list[dict]) -> None:
         with self._lock, self._sessions() as session:

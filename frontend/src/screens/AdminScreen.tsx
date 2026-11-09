@@ -560,6 +560,9 @@ export function AdminScreen() {
       Math.max(1, Number(settings.monthlyDay ?? 1) || 1),
     );
     const reportTestEmail = String(settings.reportTestEmail ?? "").trim();
+    const reportHseEmail = String(settings.reportHseEmail ?? "").trim();
+    const reportHseName =
+      String(settings.reportHseName ?? "Dept HSE").trim() || "Dept HSE";
     const rawDist = (settings.reportDistribution as Record<string, { name?: string; email?: string }>) || {};
     const reportDistribution: Record<string, { name: string; email: string }> = {};
     for (const p of ADMIN_PROJECTS) {
@@ -576,6 +579,8 @@ export function AdminScreen() {
         weeklyDay,
         monthlyDay,
         reportTestEmail,
+        reportHseEmail,
+        reportHseName,
         reportDistribution,
       },
       `Report schedule saved · daily at ${dailyAt}`,
@@ -1453,7 +1458,7 @@ export function AdminScreen() {
                 Test email override
                 <input
                   type="email"
-                  placeholder="you@example.com"
+                  placeholder="rose.subait@binquraya.com"
                   value={String(settings.reportTestEmail ?? "")}
                   onChange={(event) =>
                     setSettings({
@@ -1463,8 +1468,25 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  When set, every Issue sends here instead of the project PM email
-                  (useful while real PM addresses are still missing)
+                  When set, compile-ready sign notices (and Issue emails) go here
+                  instead of HSE / Project PM addresses
+                </span>
+              </label>
+              <label className="fld">
+                Dept HSE email
+                <input
+                  type="email"
+                  placeholder="hse@example.com"
+                  value={String(settings.reportHseEmail ?? "")}
+                  onChange={(event) =>
+                    setSettings({
+                      ...settings,
+                      reportHseEmail: event.target.value,
+                    })
+                  }
+                />
+                <span className="hint">
+                  Weekly compile notices go here; monthly notices also include HSE
                 </span>
               </label>
               <div className="fld">
