@@ -26,6 +26,8 @@ import {
   type WeatherStation,
   type WeeklyWeatherLog,
 } from "../lib/weatherReport";
+import heatIndexChart from "../assets/heat-index-chart.png";
+import heatIndexCategories from "../assets/heat-index-categories.png";
 import { useChartReveal } from "../lib/useChartReveal";
 import { useProjectAccess } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
@@ -107,9 +109,54 @@ function buildWeeklyLogWeekOptions(ref: Date = new Date()) {
   });
 }
 const CAT_NAMES = ["Normal", "Caution", "Extreme Caution", "Danger", "Extreme Danger"] as const;
-const CAT_COLORS = ["#A9A6A3", "#E9CF6A", "#F0A04B", "#E5604F", "#8E0B20"];
+const CAT_COLORS = ["#A9A6A3", "#5FA86B", "#E9CF6A", "#F0A04B", "#C8102E"];
 const PROJECT_COLORS = ["#C8102E", "#8B8A8F", "#E9CF6A", "#A67C52"];
 const STATION_COLORS = ["#C8102E", "#8B8A8F", "#E9CF6A", "#A67C52", "#6B8E3D"];
+
+const HEAT_INDEX_GUIDE = [
+  {
+    roman: "IV",
+    level: 4,
+    name: "Extreme Danger",
+    range: "≥ 52",
+    symptoms: "Heat stroke imminent.",
+    workRest: "20:10",
+    water: "1 cup every 10 minutes",
+    controls: "See Sec. 13.4.2(F) for progressive controls",
+  },
+  {
+    roman: "III",
+    level: 3,
+    name: "Danger",
+    range: "39–51",
+    symptoms:
+      "Heat cramps, heat exhaustion or heat stroke likely with prolonged exposure and physical activity.",
+    workRest: "30:10",
+    water: "1 cup every 15 minutes",
+    controls: "Work under shade",
+  },
+  {
+    roman: "II",
+    level: 2,
+    name: "Extreme Caution",
+    range: "30–38",
+    symptoms:
+      "Heat cramps, heat exhaustion or heat stroke possible with prolonged exposure and physical activity.",
+    workRest: "50:10",
+    water: "1 cup every 20 minutes",
+    controls: "No working alone (buddy system)",
+  },
+  {
+    roman: "I",
+    level: 1,
+    name: "Caution",
+    range: "25–29",
+    symptoms: "Fatigue possible with prolonged exposure and/or physical activity.",
+    workRest: "Normal / scheduled",
+    water: "1 cup every 20 minutes",
+    controls: "Visual monitoring of workers in direct sun and heavy work",
+  },
+] as const;
 
 function pad(n: number) {
   return String(n).padStart(2, "0");
@@ -1779,6 +1826,65 @@ export function WeatherScreen() {
               </div>
             </article>
           ))}
+
+          <article className="v1-card wx-hi-ref">
+            <div className="hd">
+              <h3>Heat index reference</h3>
+            </div>
+            <p className="sub">
+              Lookup chart and danger categories used when logging temperature and RH. Category is
+              calculated from heat index (1 cup = 250 ml).
+            </p>
+
+            <div className="wx-hi-ref-bands">
+              {HEAT_INDEX_GUIDE.map((row) => (
+                <div key={row.roman} className={`wx-hi-band c${row.level}`}>
+                  <div className="wx-hi-band-top">
+                    <span className="wx-hi-band-roman">
+                      {row.roman}. {row.name}
+                    </span>
+                    <strong className="mono">{row.range}</strong>
+                  </div>
+                  <p>{row.symptoms}</p>
+                  <dl>
+                    <div>
+                      <dt>Work:Rest</dt>
+                      <dd>{row.workRest}</dd>
+                    </div>
+                    <div>
+                      <dt>Water</dt>
+                      <dd>{row.water}</dd>
+                    </div>
+                    <div>
+                      <dt>Controls</dt>
+                      <dd>{row.controls}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
+
+            <div className="wx-hi-ref-figs">
+              <figure className="wx-hi-fig">
+                <figcaption>Heat index chart · Air temp (°C) × Relative humidity (%)</figcaption>
+                <div className="wx-hi-fig-frame">
+                  <img
+                    src={heatIndexChart}
+                    alt="Heat index chart by air temperature and relative humidity"
+                  />
+                </div>
+              </figure>
+              <figure className="wx-hi-fig">
+                <figcaption>Heat index danger categories · work/rest and water guidance</figcaption>
+                <div className="wx-hi-fig-frame">
+                  <img
+                    src={heatIndexCategories}
+                    alt="Heat index danger category table with work rest and water requirements"
+                  />
+                </div>
+              </figure>
+            </div>
+          </article>
         </>
       ) : null}
 

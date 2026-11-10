@@ -92,37 +92,47 @@ WEATHER_STATIONS = [
 
 
 def _heat_category(h: float) -> dict:
-    if h >= 54:
+    """Heat-index danger bands aligned with the Weather Monitoring reference chart."""
+    if h >= 52:
         return {
             "level": 4,
             "name": "Extreme Danger",
-            "prevention": "Stop outdoor work. Emergency cooling and medical standby.",
+            "prevention": (
+                "Work/rest 20:10. 1 cup water every 10 minutes. "
+                "Apply progressive controls (Sec. 13.4.2(F)). Heat stroke imminent."
+            ),
         }
-    if h >= 41:
+    if h >= 39:
         return {
             "level": 3,
             "name": "Danger",
             "prevention": (
-                "Work/rest 15/45 min, one cup of water every 15 minutes, "
-                "supervisor check every hour."
+                "Work/rest 30:10 under shade. 1 cup water every 15 minutes. "
+                "Heat cramps, exhaustion or stroke likely with prolonged exposure."
             ),
         }
-    if h >= 32:
+    if h >= 30:
         return {
             "level": 2,
             "name": "Extreme Caution",
-            "prevention": "Work/rest 30/30 min in shade, one cup of water every 15 minutes.",
+            "prevention": (
+                "Work/rest 50:10. Buddy system — no working alone. "
+                "1 cup water every 20 minutes."
+            ),
         }
-    if h >= 27:
+    if h >= 25:
         return {
             "level": 1,
             "name": "Caution",
-            "prevention": "One cup of water every 20 minutes, shaded rest breaks.",
+            "prevention": (
+                "Normal/scheduled work-rest. Visual monitoring in direct sun "
+                "and heavy work. 1 cup water every 20 minutes."
+            ),
         }
     return {
         "level": 0,
         "name": "Normal",
-        "prevention": "One cup of water every 20 minutes.",
+        "prevention": "1 cup of water every 20 minutes (1 cup = 250 ml).",
     }
 
 
@@ -297,6 +307,11 @@ class PlatformStore:
         self._seed_asset_classifications()
         self._seed_users()
         self._ensure_sla_deadlines()
+        self._seed_key_personnel_v1()
+        self._seed_key_personnel_mgs_v2()
+        self._seed_key_personnel_yanbu_v3()
+        self._seed_key_personnel_ras_tanura_v4()
+        self._seed_key_personnel_dhahran_v5()
         self._seed_sla_demo_cases()
         self._seed_dashcam_demo_cases()
         self._seed_speed_demo_cases()
@@ -2671,6 +2686,206 @@ class PlatformStore:
             "daysByStation": row.days_by_station or [],
             "submitted": True,
         }
+
+    def _seed_key_personnel_v1(self) -> None:
+        """Persist Key Personnel packs once so Replit / SQLite keeps them."""
+        from app.services.key_personnel_seed import default_key_personnel_packs
+
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_v1") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            defaults = default_key_personnel_packs()
+            if existing is None or not isinstance(existing.value, dict):
+                session.add(AppStateRow(key="key_personnel", value=defaults))
+            else:
+                merged = dict(existing.value)
+                for project_id, pack in defaults.items():
+                    current = merged.get(project_id)
+                    # Fill missing projects, or replace empty Jafurah placeholders.
+                    if not isinstance(current, dict):
+                        merged[project_id] = pack
+                        continue
+                    if project_id == "Jafurah":
+                        names = {
+                            str(row.get("name") or "")
+                            for group in (current.get("groups") or [])
+                            if isinstance(group, dict)
+                            for row in (group.get("rows") or [])
+                            if isinstance(row, dict)
+                        }
+                        if "Jason Michael" not in names:
+                            # Keep any hotline the admin already typed.
+                            pack = dict(pack)
+                            pack["hotline"] = str(current.get("hotline") or "")
+                            merged[project_id] = pack
+                    elif project_id not in merged:
+                        merged[project_id] = pack
+                existing.value = merged
+                flag_modified(existing, "value")
+            session.add(AppStateRow(key="key_personnel_seeded_v1", value=True))
+            session.commit()
+
+    def _seed_key_personnel_mgs_v2(self) -> None:
+        """Fill the MGS pack once (keeps any admin hotline already typed)."""
+        from app.services.key_personnel_seed import mgs_pack
+
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_mgs_v2") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            packs = dict(existing.value) if existing and isinstance(existing.value, dict) else {}
+            current = packs.get("MGS")
+            names = {
+                str(row.get("name") or "")
+                for group in ((current or {}).get("groups") or [])
+                if isinstance(group, dict)
+                for row in (group.get("rows") or [])
+                if isinstance(row, dict)
+            }
+            if "Zaid Nawwaf AlEitan" not in names:
+                pack = mgs_pack()
+                if isinstance(current, dict) and str(current.get("hotline") or "").strip():
+                    pack = dict(pack)
+                    pack["hotline"] = str(current.get("hotline") or "")
+                packs["MGS"] = pack
+                if existing:
+                    existing.value = packs
+                    flag_modified(existing, "value")
+                else:
+                    session.add(AppStateRow(key="key_personnel", value=packs))
+            session.add(AppStateRow(key="key_personnel_seeded_mgs_v2", value=True))
+            session.commit()
+
+    def _seed_key_personnel_yanbu_v3(self) -> None:
+        """Fill the Yanbu pack once (keeps any admin hotline already typed)."""
+        from app.services.key_personnel_seed import yanbu_pack
+
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_yanbu_v3") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            packs = dict(existing.value) if existing and isinstance(existing.value, dict) else {}
+            current = packs.get("Yanbu")
+            names = {
+                str(row.get("name") or "")
+                for group in ((current or {}).get("groups") or [])
+                if isinstance(group, dict)
+                for row in (group.get("rows") or [])
+                if isinstance(row, dict)
+            }
+            if "Enjamamul Haque" not in names:
+                pack = yanbu_pack()
+                if isinstance(current, dict) and str(current.get("hotline") or "").strip():
+                    pack = dict(pack)
+                    pack["hotline"] = str(current.get("hotline") or "")
+                packs["Yanbu"] = pack
+                if existing:
+                    existing.value = packs
+                    flag_modified(existing, "value")
+                else:
+                    session.add(AppStateRow(key="key_personnel", value=packs))
+            session.add(AppStateRow(key="key_personnel_seeded_yanbu_v3", value=True))
+            session.commit()
+
+    def _seed_key_personnel_ras_tanura_v4(self) -> None:
+        """Fill the Ras Tanura pack once (keeps any admin hotline already typed)."""
+        from app.services.key_personnel_seed import ras_tanura_pack
+
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_ras_tanura_v4") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            packs = (
+                dict(existing.value)
+                if existing and isinstance(existing.value, dict)
+                else {}
+            )
+            current = packs.get("Ras Tanura")
+            names = {
+                str(row.get("name") or "")
+                for group in ((current or {}).get("groups") or [])
+                if isinstance(group, dict)
+                for row in (group.get("rows") or [])
+                if isinstance(row, dict)
+            }
+            if "Sirajul Islam" not in names:
+                pack = ras_tanura_pack()
+                if isinstance(current, dict) and str(current.get("hotline") or "").strip():
+                    pack = dict(pack)
+                    pack["hotline"] = str(current.get("hotline") or "")
+                packs["Ras Tanura"] = pack
+                if existing:
+                    existing.value = packs
+                    flag_modified(existing, "value")
+                else:
+                    session.add(AppStateRow(key="key_personnel", value=packs))
+            session.add(
+                AppStateRow(key="key_personnel_seeded_ras_tanura_v4", value=True)
+            )
+            session.commit()
+
+    def _seed_key_personnel_dhahran_v5(self) -> None:
+        """Add empty Dhahran pack once so the tab exists before data is filled."""
+        from app.services.key_personnel_seed import empty_project_pack
+
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_dhahran_v5") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            packs = (
+                dict(existing.value)
+                if existing and isinstance(existing.value, dict)
+                else {}
+            )
+            current = packs.get("Dhahran")
+            if not isinstance(current, dict):
+                packs["Dhahran"] = empty_project_pack("Dhahran")
+                if existing:
+                    existing.value = packs
+                    flag_modified(existing, "value")
+                else:
+                    session.add(AppStateRow(key="key_personnel", value=packs))
+            session.add(
+                AppStateRow(key="key_personnel_seeded_dhahran_v5", value=True)
+            )
+            session.commit()
+
+    def get_key_personnel(self) -> dict:
+        self._seed_key_personnel_v1()
+        self._seed_key_personnel_mgs_v2()
+        self._seed_key_personnel_yanbu_v3()
+        self._seed_key_personnel_ras_tanura_v4()
+        self._seed_key_personnel_dhahran_v5()
+        with self._sessions() as session:
+            row = session.get(AppStateRow, "key_personnel")
+            if row and isinstance(row.value, dict):
+                return {str(k): dict(v) for k, v in row.value.items() if isinstance(v, dict)}
+        from app.services.key_personnel_seed import default_key_personnel_packs
+
+        return default_key_personnel_packs()
+
+    def save_key_personnel(self, packs: dict) -> dict:
+        if not isinstance(packs, dict) or not packs:
+            raise ValueError("Key personnel payload must be a project map.")
+        cleaned: dict = {}
+        for project_id, pack in packs.items():
+            if not isinstance(pack, dict):
+                continue
+            cleaned[str(project_id)] = dict(pack)
+        if not cleaned:
+            raise ValueError("No valid project packs provided.")
+        with self._lock, self._sessions() as session:
+            row = session.get(AppStateRow, "key_personnel")
+            if row:
+                row.value = cleaned
+                flag_modified(row, "value")
+            else:
+                session.add(AppStateRow(key="key_personnel", value=cleaned))
+            if session.get(AppStateRow, "key_personnel_seeded_v1") is None:
+                session.add(AppStateRow(key="key_personnel_seeded_v1", value=True))
+            session.commit()
+        return self.get_key_personnel()
 
     def list_contacts(self, project_id: str | None = None) -> list[dict]:
         with self._sessions() as session:

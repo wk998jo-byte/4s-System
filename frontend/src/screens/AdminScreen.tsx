@@ -1483,8 +1483,8 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  When set, compile-ready sign notices (and Issue emails) go here
-                  instead of HSE / Project PM addresses
+                  When set, sign-ready notices go here instead of the HSE / Project
+                  PM addresses below
                 </span>
               </label>
               <label className="fld">
@@ -1501,11 +1501,15 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  Weekly compile notices go here; monthly notices also include HSE
+                  Notified to sign weekly and monthly reports when they compile
                 </span>
               </label>
               <div className="fld">
-                <span className="adm-dist-label">Distribution · Project PM</span>
+                <span className="adm-dist-label">Project PM · monthly sign notices</span>
+                <span className="hint" style={{ display: "block", marginBottom: 8 }}>
+                  Each PM only gets a notification to sign their project&apos;s monthly
+                  report — not a report distribution
+                </span>
                 <div className="adm-dist-list">
                   {ADMIN_PROJECTS.map((p) => {
                     const dist =

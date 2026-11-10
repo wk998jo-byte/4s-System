@@ -585,6 +585,34 @@ def get_contacts(project_id: str | None = None):
     return {"items": platform_store.list_contacts(project_id)}
 
 
+@router.get("/key-personnel")
+def get_key_personnel(user: UserOut = Depends(get_current_user)):
+    return {"packs": platform_store.get_key_personnel()}
+
+
+@router.put("/key-personnel")
+def put_key_personnel(
+    payload: dict,
+    user: UserOut = Depends(require_admin),
+):
+    packs = payload.get("packs") if isinstance(payload, dict) else None
+    if not isinstance(packs, dict):
+        raise HTTPException(status_code=400, detail="Body must include a packs object.")
+    try:
+        saved = platform_store.save_key_personnel(packs)
+    except ValueError as exc:
+        _http_value_error(exc)
+    platform_store.record_audit(
+        actor_user_id=user.id,
+        actor_name=actor_label(user),
+        action="key_personnel_saved",
+        category="contacts",
+        summary="Updated Key Personnel & Contacts packs",
+        details={"projects": list(saved.keys())},
+    )
+    return {"packs": saved}
+
+
 @router.post("/cases/{case_id}/approve")
 def approve_case(case_id: str, user: UserOut = Depends(require_admin)):
     try:

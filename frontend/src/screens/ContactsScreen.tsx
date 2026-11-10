@@ -1,13 +1,82 @@
 import { useEffect, useMemo, useState } from "react";
 import bqLogo from "../assets/bq-logo-white.png";
+import { fetchKeyPersonnel, saveKeyPersonnel } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { useProjectAccess } from "../lib/useProjectAccess";
 import {
   ARAMCO_EMERGENCY,
   CONTACTS_BY_PROJECT,
   CONTACT_PROJECTS,
+  type ContactGroup,
+  type ContactPerson,
   type ContactProjectId,
+  type ProjectContacts,
 } from "../lib/contactsData";
+
+function asPerson(raw: unknown): ContactPerson | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  return {
+    name: String(row.name ?? ""),
+    position: String(row.position ?? ""),
+    number: String(row.number ?? ""),
+    email: String(row.email ?? ""),
+  };
+}
+
+function asGroup(raw: unknown): ContactGroup | null {
+  if (!raw || typeof raw !== "object") return null;
+  const group = raw as Record<string, unknown>;
+  const rows = Array.isArray(group.rows)
+    ? group.rows.map(asPerson).filter((r): r is ContactPerson => Boolean(r))
+    : [];
+  return {
+    name: String(group.name ?? "Contacts"),
+    ...(group.red ? { red: true } : {}),
+    rows,
+  };
+}
+
+function asPack(projectId: ContactProjectId, raw: unknown): ProjectContacts {
+  const fallback = structuredClone(CONTACTS_BY_PROJECT[projectId]);
+  if (!raw || typeof raw !== "object") return fallback;
+  const pack = raw as Record<string, unknown>;
+  const groups = Array.isArray(pack.groups)
+    ? pack.groups.map(asGroup).filter((g): g is ContactGroup => Boolean(g))
+    : fallback.groups;
+  const hospitals = Array.isArray(pack.hospitals)
+    ? pack.hospitals
+        .filter((h): h is Record<string, unknown> => Boolean(h) && typeof h === "object")
+        .map((h) => ({
+          name: String(h.name ?? ""),
+          number: String(h.number ?? ""),
+        }))
+    : fallback.hospitals;
+  return {
+    ...fallback,
+    id: String(pack.id ?? projectId),
+    division: pack.division != null ? String(pack.division) : fallback.division,
+    title: String(pack.title ?? fallback.title),
+    contract: pack.contract != null ? String(pack.contract) : fallback.contract,
+    client: String(pack.client ?? fallback.client),
+    hotline: String(pack.hotline ?? fallback.hotline ?? ""),
+    placeholder: Boolean(pack.placeholder ?? fallback.placeholder),
+    groups: groups.length ? groups : fallback.groups,
+    hospitals: hospitals.length ? hospitals : fallback.hospitals,
+    emergency:
+      pack.emergency && typeof pack.emergency === "object"
+        ? (pack.emergency as ProjectContacts["emergency"])
+        : fallback.emergency,
+  };
+}
+
+function mergePacks(remote: Record<string, unknown> | null | undefined) {
+  const next = {} as Record<ContactProjectId, ProjectContacts>;
+  for (const id of CONTACT_PROJECTS) {
+    next[id] = asPack(id, remote?.[id]);
+  }
+  return next;
+}
 
 function PhoneIcon() {
   return (
@@ -74,9 +143,9 @@ function ContactTable({
   onChange,
   onCopied,
 }: {
-  group: ProjectContacts["groups"][number];
+  group: ContactGroup;
   editing: boolean;
-  onChange: (row: number, col: 0 | 1 | 2, value: string) => void;
+  onChange: (row: number, col: 0 | 1 | 2 | 3, value: string) => void;
   onCopied: (v: string) => void;
 }) {
   return (
@@ -88,7 +157,8 @@ function ContactTable({
             <tr>
               <th>Name</th>
               <th>Position</th>
-              <th>Contact number</th>
+              <th>Mobile</th>
+              <th>Email</th>
             </tr>
           </thead>
           <tbody>
@@ -125,9 +195,21 @@ function ContactTable({
                     />
                   ) : (
                     <span className="kp-num">
-                      <span className="mono">{row.number}</span>
+                      <span className="mono">{row.number || "—"}</span>
                       <CopyBtn value={row.number} onCopied={onCopied} />
                     </span>
+                  )}
+                </td>
+                <td>
+                  {editing ? (
+                    <input
+                      className="kp-edit"
+                      value={row.email || ""}
+                      onChange={(e) => onChange(ri, 3, e.target.value)}
+                      placeholder="Email"
+                    />
+                  ) : (
+                    <span className="muted">{row.email || ""}</span>
                   )}
                 </td>
               </tr>
@@ -172,25 +254,78 @@ export function ContactsScreen() {
     ],
   );
   const [project, setProject] = useState<ContactProjectId>(initialProject);
-  const [packs, setPacks] = useState(() => structuredClone(CONTACTS_BY_PROJECT));
+  const [packs, setPacks] = useState(() => mergePacks(null));
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
-  // Only re-lock the tab when assigned-project scope changes (not for admins).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchKeyPersonnel();
+        if (cancelled) return;
+        setPacks(mergePacks(data.packs as Record<string, unknown>));
+      } catch {
+        if (!cancelled) setPacks(mergePacks(null));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Keep packs in sync when a new project tab is added (e.g. Dhahran).
+  useEffect(() => {
+    setPacks((prev) => {
+      let changed = false;
+      const next = { ...prev } as Record<ContactProjectId, ProjectContacts>;
+      for (const id of CONTACT_PROJECTS) {
+        if (!next[id]) {
+          next[id] = structuredClone(CONTACTS_BY_PROJECT[id]);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [CONTACT_PROJECTS.length]);
+
   useEffect(() => {
     if (projectAccess.hasAllProjectAccess) return;
     setProject(initialProject);
     setEditing(false);
   }, [initialProject, projectAccess.hasAllProjectAccess]);
 
-  const pack = packs[project];
+  const pack = packs[project] ?? CONTACTS_BY_PROJECT[project];
+  const emergency = {
+    landline: pack.emergency?.landline || ARAMCO_EMERGENCY.landline,
+    mobile: pack.emergency?.mobile || ARAMCO_EMERGENCY.mobile,
+    areas: pack.emergency?.areas?.length
+      ? pack.emergency.areas
+      : ARAMCO_EMERGENCY.areas,
+  };
 
   function toast(msg: string) {
     setFlash(msg);
     window.setTimeout(() => setFlash(null), 2200);
   }
 
-  function updateCell(gi: number, ri: number, col: 0 | 1 | 2, value: string) {
+  async function finishEditing() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const data = await saveKeyPersonnel(packs as unknown as Record<string, unknown>);
+      setPacks(mergePacks(data.packs as Record<string, unknown>));
+      setEditing(false);
+      toast("Contacts saved");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not save contacts");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateCell(gi: number, ri: number, col: 0 | 1 | 2 | 3, value: string) {
     setPacks((prev) => {
       const next = structuredClone(prev);
       const row = next[project].groups[gi]?.rows[ri];
@@ -198,6 +333,26 @@ export function ContactsScreen() {
       if (col === 0) row.name = value;
       if (col === 1) row.position = value;
       if (col === 2) row.number = value;
+      if (col === 3) row.email = value;
+      return next;
+    });
+  }
+
+  function updateHotline(value: string) {
+    setPacks((prev) => {
+      const next = structuredClone(prev) as Record<ContactProjectId, ProjectContacts>;
+      next[project].hotline = value;
+      return next;
+    });
+  }
+
+  function updateMeta(
+    field: "division" | "title" | "contract",
+    value: string,
+  ) {
+    setPacks((prev) => {
+      const next = structuredClone(prev) as Record<ContactProjectId, ProjectContacts>;
+      next[project][field] = value;
       return next;
     });
   }
@@ -209,10 +364,17 @@ export function ContactsScreen() {
         name: "[Name]",
         position: "[Position]",
         number: "[Number]",
+        email: "",
       });
       return next;
     });
   }
+
+  const hotlineDisplay = pack.hotline?.trim()
+    ? pack.hotline.trim()
+    : editing
+      ? ""
+      : "[Hotline number]";
 
   return (
     <section className="page kp-v1">
@@ -233,13 +395,17 @@ export function ContactsScreen() {
             <button
               type="button"
               className={`btn kp-edit-btn${editing ? " is-done" : ""}`}
+              disabled={saving}
               onClick={() => {
-                if (editing) toast("Contacts saved");
-                setEditing((v) => !v);
+                if (editing) {
+                  void finishEditing();
+                  return;
+                }
+                setEditing(true);
               }}
             >
               <PenIcon />
-              {editing ? "Done editing" : "Edit contacts"}
+              {editing ? (saving ? "Saving…" : "Done editing") : "Edit contacts"}
             </button>
           ) : null}
         </div>
@@ -267,15 +433,59 @@ export function ContactsScreen() {
         <div className="kp-pack-banner">
           <img src={bqLogo} alt="Bin Quraya" className="kp-logo" />
           <div className="kp-pack-title">
-            <h2>{pack.client.toUpperCase()}</h2>
-            <p>{pack.title}</p>
+            {editing ? (
+              <>
+                <input
+                  className="kp-edit kp-banner-edit"
+                  value={pack.division || ""}
+                  placeholder="Division line"
+                  onChange={(e) => updateMeta("division", e.target.value)}
+                />
+                <input
+                  className="kp-edit kp-banner-edit is-title"
+                  value={pack.title}
+                  placeholder="Project title"
+                  onChange={(e) => updateMeta("title", e.target.value)}
+                />
+                <input
+                  className="kp-edit kp-banner-edit"
+                  value={pack.contract || ""}
+                  placeholder="Contract no."
+                  onChange={(e) => updateMeta("contract", e.target.value)}
+                />
+              </>
+            ) : (
+              <>
+                {pack.division ? <p className="kp-division">{pack.division}</p> : null}
+                <h2>{pack.title}</h2>
+                {pack.contract ? <p className="kp-contract">{pack.contract}</p> : null}
+              </>
+            )}
           </div>
-          <span className="kp-tag">Saudi Aramco</span>
+        </div>
+
+        <div className="kp-hotline">
+          <PhoneIcon />
+          <span className="kp-hotline-label">Bin Quraya 24/7 Hotline</span>
+          {editing ? (
+            <input
+              className="kp-edit kp-hotline-edit mono"
+              value={pack.hotline || ""}
+              placeholder="Enter hotline number"
+              onChange={(e) => updateHotline(e.target.value)}
+              aria-label="Bin Quraya 24/7 hotline number"
+            />
+          ) : (
+            <strong className="mono kp-hotline-num">
+              {hotlineDisplay}
+              <CopyBtn value={pack.hotline || ""} onCopied={(v) => toast(`Copied ${v}`)} />
+            </strong>
+          )}
         </div>
 
         <div className="kp-pack-body">
-          {pack.groups.map((group, gi) => (
-            <div key={group.name}>
+          {(pack.groups ?? []).map((group, gi) => (
+            <div key={`${group.name}-${gi}`}>
               <ContactTable
                 group={group}
                 editing={editing}
@@ -295,13 +505,11 @@ export function ContactsScreen() {
               <div className="kp-ct-head">Saudi Aramco emergency contact number</div>
               <div className="kp-card">
                 <div className="kp-badges">
-                  <span className="kp-badge red">Dial from landline {ARAMCO_EMERGENCY.landline}</span>
-                  <span className="kp-badge amber">
-                    Dial from mobile {ARAMCO_EMERGENCY.mobile}
-                  </span>
+                  <span className="kp-badge red">Dial from landline {emergency.landline}</span>
+                  <span className="kp-badge amber">Dial from mobile {emergency.mobile}</span>
                 </div>
                 <div className="kp-ecall">
-                  {ARAMCO_EMERGENCY.areas.map((a) => (
+                  {emergency.areas.map((a) => (
                     <div key={a.label}>
                       <small>{a.label}</small>
                       <b title={a.number}>
@@ -320,7 +528,10 @@ export function ContactsScreen() {
                   {ARAMCO_EMERGENCY.gov.map((a) => (
                     <div key={a.label}>
                       <small>{a.label}</small>
-                      <b>{a.number}</b>
+                      <b>
+                        {a.number}
+                        <CopyBtn value={a.number} onCopied={(v) => toast(`Copied ${v}`)} />
+                      </b>
                     </div>
                   ))}
                 </div>
@@ -354,8 +565,8 @@ export function ContactsScreen() {
               <div className="kp-ct-head amber">Hospital emergency number</div>
               <div className="kp-card">
                 <div className="kp-hosp">
-                  {pack.hospitals.map((h) => (
-                    <div key={h.name}>
+                  {(pack.hospitals ?? []).map((h) => (
+                    <div key={`${h.name}-${h.number}`}>
                       <span>{h.name}</span>
                       <b className="mono">
                         {h.number}

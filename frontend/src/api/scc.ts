@@ -320,6 +320,15 @@ export const fetchContacts = (projectId?: string) =>
     projectId ? `/api/v1/contacts?project_id=${projectId}` : "/api/v1/contacts",
   );
 
+export const fetchKeyPersonnel = () =>
+  request<{ packs: Record<string, unknown> }>("/api/v1/key-personnel");
+
+export const saveKeyPersonnel = (packs: Record<string, unknown>) =>
+  request<{ packs: Record<string, unknown> }>("/api/v1/key-personnel", {
+    method: "PUT",
+    body: JSON.stringify({ packs }),
+  });
+
 export const createContact = (body: {
   project_id: string;
   category: string;

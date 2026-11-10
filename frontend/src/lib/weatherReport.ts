@@ -112,40 +112,44 @@ export function sundayWeekParts(day: Date): { year: number; week: number } {
   return { year: value.getFullYear(), week: Math.floor(diffDays / 7) + 1 };
 }
 
+/** Heat-index danger bands from the Weather Monitoring reference chart. */
 export function heatCategory(h: number): HeatCategory {
-  if (h >= 54) {
+  if (h >= 52) {
     return {
       level: 4,
       name: "Extreme Danger",
-      prevention: "Stop outdoor work. Emergency cooling and medical standby.",
+      prevention:
+        "Work/rest 20:10. 1 cup water every 10 minutes. Apply progressive controls (Sec. 13.4.2(F)). Heat stroke imminent.",
     };
   }
-  if (h >= 41) {
+  if (h >= 39) {
     return {
       level: 3,
       name: "Danger",
       prevention:
-        "Work/rest 15/45 min, one cup of water every 15 minutes, supervisor check every hour.",
+        "Work/rest 30:10 under shade. 1 cup water every 15 minutes. Heat cramps, exhaustion or stroke likely with prolonged exposure.",
     };
   }
-  if (h >= 32) {
+  if (h >= 30) {
     return {
       level: 2,
       name: "Extreme Caution",
-      prevention: "Work/rest 30/30 min in shade, one cup of water every 15 minutes.",
+      prevention:
+        "Work/rest 50:10. Buddy system — no working alone. 1 cup water every 20 minutes.",
     };
   }
-  if (h >= 27) {
+  if (h >= 25) {
     return {
       level: 1,
       name: "Caution",
-      prevention: "One cup of water every 20 minutes, shaded rest breaks.",
+      prevention:
+        "Normal/scheduled work-rest. Visual monitoring in direct sun and heavy work. 1 cup water every 20 minutes.",
     };
   }
   return {
     level: 0,
     name: "Normal",
-    prevention: "One cup of water every 20 minutes.",
+    prevention: "1 cup of water every 20 minutes (1 cup = 250 ml).",
   };
 }
 
