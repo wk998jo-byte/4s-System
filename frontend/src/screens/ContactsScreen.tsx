@@ -137,15 +137,31 @@ function CopyBtn({ value, onCopied }: { value: string; onCopied: (v: string) => 
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ContactTable({
   group,
   editing,
   onChange,
+  onDelete,
   onCopied,
 }: {
   group: ContactGroup;
   editing: boolean;
   onChange: (row: number, col: 0 | 1 | 2 | 3, value: string) => void;
+  onDelete: (row: number) => void;
   onCopied: (v: string) => void;
 }) {
   return (
@@ -159,6 +175,7 @@ function ContactTable({
               <th>Position</th>
               <th>Mobile</th>
               <th>Email</th>
+              {editing ? <th className="kp-del-col"> </th> : null}
             </tr>
           </thead>
           <tbody>
@@ -212,6 +229,19 @@ function ContactTable({
                     <span className="muted">{row.email || ""}</span>
                   )}
                 </td>
+                {editing ? (
+                  <td className="kp-del-col">
+                    <button
+                      type="button"
+                      className="kp-del"
+                      aria-label={`Delete ${row.name || "contact"}`}
+                      title="Delete contact"
+                      onClick={() => onDelete(ri)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -370,6 +400,25 @@ export function ContactsScreen() {
     });
   }
 
+  function deleteRow(gi: number, ri: number) {
+    const row = packs[project]?.groups[gi]?.rows[ri];
+    if (!row) return;
+    const label =
+      row.name && !row.name.startsWith("[")
+        ? row.name
+        : row.position && !row.position.startsWith("[")
+          ? row.position
+          : "this contact";
+    if (!window.confirm(`Delete “${label}”?`)) return;
+    setPacks((prev) => {
+      const next = structuredClone(prev);
+      const rows = next[project].groups[gi]?.rows;
+      if (!rows || ri < 0 || ri >= rows.length) return prev;
+      rows.splice(ri, 1);
+      return next;
+    });
+  }
+
   const hotlineDisplay = pack.hotline?.trim()
     ? pack.hotline.trim()
     : editing
@@ -490,6 +539,7 @@ export function ContactsScreen() {
                 group={group}
                 editing={editing}
                 onChange={(ri, col, value) => updateCell(gi, ri, col, value)}
+                onDelete={(ri) => deleteRow(gi, ri)}
                 onCopied={(v) => toast(`Copied ${v}`)}
               />
               {editing ? (

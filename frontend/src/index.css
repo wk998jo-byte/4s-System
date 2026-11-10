@@ -5509,6 +5509,9 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .kp-copy:hover{color:var(--ink);background:var(--surface-2)}
 .kp-edit{width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--bg);font:inherit}
 .kp-add-row{margin-top:6px;align-self:flex-start}
+.kp-del-col{width:40px;text-align:center}
+.kp-del{border:0;background:transparent;color:var(--muted);padding:6px;border-radius:7px;cursor:pointer;display:inline-grid;place-items:center}
+.kp-del:hover{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}
 .kp-grid{display:grid;gap:16px;align-items:stretch}
 .kp-grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .kp-grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
