@@ -741,6 +741,9 @@ export const fetchOverdueNotifications = () =>
   request<{
     items: OverdueNotificationItem[];
     counts: { esc: number; over: number; soon: number; all: number };
+    /** Unfiltered SLA totals (before role / notify-toggle filtering). */
+    system_counts?: { esc: number; over: number; soon: number; all: number };
+    notify?: { operator: boolean; admin: boolean; hse: boolean };
     deadlines?: {
       High?: number;
       Medium?: number;

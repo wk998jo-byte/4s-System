@@ -3941,6 +3941,20 @@ class PlatformStore:
                     merged["reportDistribution"] = dist
             return merged
 
+    @staticmethod
+    def _setting_bool(settings: dict, key: str, default: bool = True) -> bool:
+        """Coerce persisted setting values to a real bool (handles 'false' / 0)."""
+        if key not in settings:
+            return default
+        value = settings.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() not in {"", "0", "false", "no", "off"}
+        return bool(value) if value is not None else default
+
     def save_platform_settings(self, payload: dict) -> dict:
         current = self.get_platform_settings()
         next_value = {**current, **(payload or {})}
@@ -3965,6 +3979,11 @@ class PlatformStore:
             next_value["reportHseEmail"] = str(payload.get("reportHseEmail") or "").strip()
         if "reportHseName" in (payload or {}):
             next_value["reportHseName"] = str(payload.get("reportHseName") or "Dept HSE").strip()
+        for flag in ("notifyOperator", "notifyAdmin", "notifyHSE"):
+            if flag in (payload or {}):
+                next_value[flag] = self._setting_bool(payload, flag, True)
+            else:
+                next_value[flag] = self._setting_bool(next_value, flag, True)
         with self._lock, self._sessions() as session:
             row = session.get(AppStateRow, "platform_settings")
             if row:
@@ -4369,9 +4388,12 @@ class PlatformStore:
                 item["compile_notified_at"] = now_iso
                 item["compile_notify"] = {"at": now_iso, "deliveries": deliveries}
 
+        settings = self.get_platform_settings()
+        notify_hse = self._setting_bool(settings, "notifyHSE", True)
+
         # --- Weekly: single HSE digest ---
         if newly_weekly:
-            hse = self._hse_notify_inbox()
+            hse = self._hse_notify_inbox() if notify_hse else None
             if hse:
                 try:
                     delivery = send_report_ready_notice(
@@ -4391,10 +4413,13 @@ class PlatformStore:
                     mark(newly_weekly, [delivery])
                 except Exception:
                     pass
+            elif not notify_hse:
+                # Still mark so we don't spam once the toggle is turned back on.
+                mark(newly_weekly, [{"mode": "skipped", "reason": "notifyHSE off"}])
 
         # --- Monthly: one HSE digest + one PM email per project ---
         if newly_monthly:
-            hse = self._hse_notify_inbox()
+            hse = self._hse_notify_inbox() if notify_hse else None
             hse_delivery = None
             if hse:
                 try:
@@ -4785,18 +4810,39 @@ class PlatformStore:
                 }
             )
 
+        system_counts = {
+            "esc": sum(1 for item in items if item["state"] == "esc"),
+            "over": sum(1 for item in items if item["state"] == "over"),
+            "soon": sum(1 for item in items if item["state"] == "soon"),
+            "all": len(items),
+        }
+
         role = (user or {}).get("role") or ""
-        notify_op = bool(settings.get("notifyOperator", True))
-        notify_admin = bool(settings.get("notifyAdmin", True))
-        notify_hse = bool(settings.get("notifyHSE", True))
+        notify_op = self._setting_bool(settings, "notifyOperator", True)
+        notify_admin = self._setting_bool(settings, "notifyAdmin", True)
+        notify_hse = self._setting_bool(settings, "notifyHSE", True)
+        # Match Administration → Who gets notified copy:
+        # Operator: due soon + overdue (+ escalated, still their open cases)
+        # Admin: overdue (+ escalated)
+        # Dept HSE: escalated only
         if role == "dept_hse":
-            items = [item for item in items if item["state"] == "esc"] if notify_hse else []
+            items = (
+                [item for item in items if item["state"] == "esc"]
+                if notify_hse
+                else []
+            )
         elif role == "admin":
-            if not notify_admin:
-                items = []
+            items = (
+                [item for item in items if item["state"] in {"over", "esc"}]
+                if notify_admin
+                else []
+            )
         elif role == "operator":
-            if not notify_op:
-                items = []
+            items = (
+                [item for item in items if item["state"] in {"soon", "over", "esc"}]
+                if notify_op
+                else []
+            )
         # Project PM / receiver: project-scoped rows already filtered; show all states.
 
         items.sort(key=lambda item: item["age_hours"], reverse=True)
@@ -4807,6 +4853,12 @@ class PlatformStore:
                 "over": sum(1 for item in items if item["state"] == "over"),
                 "soon": sum(1 for item in items if item["state"] == "soon"),
                 "all": len(items),
+            },
+            "system_counts": system_counts,
+            "notify": {
+                "operator": notify_op,
+                "admin": notify_admin,
+                "hse": notify_hse,
             },
             "deadlines": {
                 "High": (sla.get("High") or {}).get("hours", 24),

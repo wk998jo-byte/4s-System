@@ -320,11 +320,14 @@ export function AppShell({
     load();
     const timer = window.setInterval(load, 30000);
     const onCasesChanged = () => load();
+    const onSettingsChanged = () => load();
     window.addEventListener("scc-cases-changed", onCasesChanged);
+    window.addEventListener("scc-settings-changed", onSettingsChanged);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener("scc-cases-changed", onCasesChanged);
+      window.removeEventListener("scc-settings-changed", onSettingsChanged);
     };
   }, [route]);
 

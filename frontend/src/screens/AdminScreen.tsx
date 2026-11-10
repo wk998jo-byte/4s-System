@@ -483,10 +483,11 @@ export function AdminScreen() {
   async function refreshOverdueCounts() {
     try {
       const data = await fetchOverdueNotifications();
+      const totals = data.system_counts || data.counts;
       setOverdueCounts({
-        esc: data.counts.esc,
-        over: data.counts.over,
-        soon: data.counts.soon,
+        esc: totals.esc,
+        over: totals.over,
+        soon: totals.soon,
       });
     } catch {
       /* keep last known counts */
@@ -512,8 +513,22 @@ export function AdminScreen() {
   }
 
   function toggleSetting(key: string) {
-    const next = { ...settings, [key]: !Boolean(settings[key]) };
-    void persistSettings(next, "Notification setting saved");
+    const nextOn = !Boolean(settings[key]);
+    const next = { ...settings, [key]: nextOn };
+    const label =
+      key === "notifyOperator"
+        ? "Operator"
+        : key === "notifyAdmin"
+          ? "SCC Admin"
+          : key === "notifyHSE"
+            ? "Department HSE"
+            : "Role";
+    void persistSettings(
+      next,
+      nextOn
+        ? `${label} notifications enabled`
+        : `${label} notifications disabled`,
+    );
   }
 
   function patchSla(patch: Partial<SlaBlock>) {
@@ -1024,7 +1039,7 @@ export function AdminScreen() {
                 [
                   "notifyHSE",
                   "Department HSE",
-                  "Email on escalation, and in the weekly report",
+                  "Notification on escalation, and email + in-system on weekly and monthly reports",
                 ],
               ] as const
             ).map(([key, title, sub]) => (
