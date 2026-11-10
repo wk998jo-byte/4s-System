@@ -30,10 +30,12 @@ import {
 import { AssetFields } from "./AssetFields";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { DashcamRecordDrawer } from "./DashcamRecordDrawer";
-import {SelectList,
+import {
+  SelectList,
   SignedInNameField,
   StatusPill,
   RiskPill,
+  bannerYear,
   nowLocal,
   todayIso,
   useList,
@@ -1688,7 +1690,7 @@ export function DashcamScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const projectList = useList("project");
   const departmentList = useList("department");
   const violationList = useList("dashcam_observation_type");

@@ -140,7 +140,11 @@ function Screen({
   }
   if (route.name === "detail") return <CaseDetailScreen id={route.id} />;
   if (route.name === "review") return <ReviewScreen caseId={route.caseId} />;
-  if (route.name === "reports") return <ReportsScreen />;
+  if (route.name === "reports") {
+    return (
+      <ReportsScreen reportId={route.reportId} openSign={Boolean(route.sign)} />
+    );
+  }
   if (route.name === "kpi") return <KpiScreen />;
   if (route.name === "weather") return <WeatherScreen />;
   if (route.name === "hw") return <HwScreen />;

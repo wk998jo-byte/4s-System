@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { bannerYear } from "../screens/shared";
 
 export function PageBanner({
   kicker,
@@ -7,6 +8,7 @@ export function PageBanner({
   subtitle,
   actions,
   icon,
+  withYear = false,
 }: {
   kicker?: string;
   title: string;
@@ -14,7 +16,15 @@ export function PageBanner({
   subtitle?: ReactNode;
   actions?: ReactNode;
   icon?: ReactNode;
+  /** Append the current calendar year to the accent (e.g. DASHBOARD 2027). */
+  withYear?: boolean;
 }) {
+  const accent =
+    titleAccent == null
+      ? null
+      : withYear
+        ? `${titleAccent} ${bannerYear()}`
+        : titleAccent;
   return (
     <section className="v1-banner">
       <div className="v1-banner-icon" aria-hidden>
@@ -24,7 +34,7 @@ export function PageBanner({
         {kicker ? <p className="v1-banner-kicker">{kicker}</p> : null}
         <h1>
           {title}
-          {titleAccent ? <em> {titleAccent}</em> : null}
+          {accent ? <em> {accent}</em> : null}
         </h1>
         {subtitle ? <p>{subtitle}</p> : null}
       </div>

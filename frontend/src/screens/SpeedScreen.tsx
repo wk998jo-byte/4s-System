@@ -30,9 +30,11 @@ import {
 import { AssetFields } from "./AssetFields";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { SpeedRecordDrawer } from "./SpeedRecordDrawer";
-import {SelectList,
+import {
+  SelectList,
   SignedInNameField,
   StatusPill,
+  bannerYear,
   nowLocal,
   speedSummaryPreview,
   todayIso,
@@ -1748,7 +1750,7 @@ export function SpeedScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const projectList = useList("project");
   const departmentList = useList("department");
   const speedTypeList = useList("speed_violation_type");

@@ -11,7 +11,7 @@ import {
   type WeatherWeeklyLogDto,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
-import { formatUserLabel } from "./shared";
+import { bannerYear, formatUserLabel } from "./shared";
 import {
   heatCategory,
   isoDate,
@@ -839,7 +839,7 @@ export function WeatherScreen() {
   const { user } = useAuth();
   const canRecordWeather = Boolean(user?.capabilities.record_weather);
   const now = useMemo(() => new Date(), []);
-  const year = now.getFullYear();
+  const year = bannerYear(now);
 
   const [tab, setTab] = useState<TabId>("dash");
   const [project, setProject] = useState("All");

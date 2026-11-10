@@ -7,7 +7,7 @@ export type Route =
   | { name: "new"; type: ModuleType }
   | { name: "detail"; id: string }
   | { name: "review"; caseId?: string }
-  | { name: "reports" }
+  | { name: "reports"; reportId?: string; sign?: boolean }
   | { name: "kpi" }
   | { name: "weather" }
   | { name: "hw" }
@@ -59,7 +59,12 @@ export function parseHash(hash?: string): Route {
     const caseId = params.get("case") || undefined;
     return caseId ? { name: "review", caseId } : { name: "review" };
   }
-  if (a === "reports") return { name: "reports" };
+  if (a === "reports") {
+    const reportId = params.get("report") || undefined;
+    const sign = params.get("sign") === "1" || params.get("sign") === "true";
+    if (reportId) return { name: "reports", reportId, sign: sign || undefined };
+    return { name: "reports" };
+  }
   if (a === "kpi") return { name: "kpi" };
   if (a === "weather") return { name: "weather" };
   if (a === "hw" || a === "scc-hw") return { name: "hw" };
@@ -86,6 +91,13 @@ export function href(route: Route): string {
   }
   if (route.name === "hw") return "#/scc-hw";
   if (route.name === "performance") return "#/operators";
+  if (route.name === "reports") {
+    if (!route.reportId) return "#/reports";
+    const params = new URLSearchParams();
+    params.set("report", route.reportId);
+    if (route.sign) params.set("sign", "1");
+    return `#/reports?${params.toString()}`;
+  }
   return `#/${route.name}`;
 }
 

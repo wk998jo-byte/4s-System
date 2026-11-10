@@ -4,6 +4,11 @@ import { fetchList, type CaseSummary, type ListItem } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { href, type ModuleType } from "../lib/routing";
 
+/** Calendar year for page banner titles — rolls over automatically on 1 Jan. */
+export function bannerYear(now: Date = new Date()) {
+  return now.getFullYear();
+}
+
 export const TYPE_LABEL: Record<string, string> = {
   ai_camera: "AI Camera",
   dashcam: "DashCam",

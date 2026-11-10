@@ -13,7 +13,9 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import {useList,
+import {
+  bannerYear,
+  useList,
   ProjectOnlyViewSeg,
 } from "./shared";
 
@@ -777,7 +779,7 @@ export function KpiScreen() {
 
   const nowDate = useMemo(() => new Date(), []);
   const nowMs = nowDate.getTime();
-  const year = nowDate.getFullYear();
+  const year = bannerYear(nowDate);
   const selectedRange = useMemo(
     () => periodRange(period, customFrom, customTo, nowDate),
     [period, customFrom, customTo, nowDate],

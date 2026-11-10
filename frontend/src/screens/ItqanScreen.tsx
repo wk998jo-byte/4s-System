@@ -26,8 +26,10 @@ import {
 } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { ItqanRecordDrawer } from "./ItqanRecordDrawer";
-import {SelectList,
+import {
+  SelectList,
   SignedInNameField,
+  bannerYear,
   nowLocal,
   todayIso,
   useList,
@@ -1135,7 +1137,7 @@ export function ItqanScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const projectList = useList("project");
   const departmentList = useList("department");
   const [cases, setCases] = useState<CaseSummary[]>([]);

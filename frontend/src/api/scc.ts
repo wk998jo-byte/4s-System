@@ -728,19 +728,21 @@ export type OverdueNotificationItem = {
   risk_key?: string;
   status?: string;
   status_label?: string;
-  state: "soon" | "over" | "esc" | string;
+  state: "soon" | "over" | "esc" | "report" | string;
   state_label?: string;
   detail?: string;
   age_hours: number;
   over_hours?: number;
   left_hours?: number;
   deadline_hours?: number;
+  reported_by?: string;
+  href_hint?: string;
 };
 
 export const fetchOverdueNotifications = () =>
   request<{
     items: OverdueNotificationItem[];
-    counts: { esc: number; over: number; soon: number; all: number };
+    counts: { esc: number; over: number; soon: number; report?: number; all: number };
     /** Unfiltered SLA totals (before role / notify-toggle filtering). */
     system_counts?: { esc: number; over: number; soon: number; all: number };
     notify?: { operator: boolean; admin: boolean; hse: boolean };
@@ -763,7 +765,7 @@ export function notifyCasesChanged() {
 
 /** Open the shell notifications panel, optionally on a specific tab. */
 export function openNotificationsPanel(
-  tab: "all" | "esc" | "over" | "soon" = "all",
+  tab: "all" | "esc" | "over" | "soon" | "report" = "all",
 ) {
   if (typeof window !== "undefined") {
     window.dispatchEvent(

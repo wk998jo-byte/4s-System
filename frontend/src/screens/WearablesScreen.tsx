@@ -30,9 +30,11 @@ import {
 } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import { SosRecordDrawer } from "./SosRecordDrawer";
-import {SelectList,
+import {
+  SelectList,
   SignedInNameField,
   StatusPill,
+  bannerYear,
   nowLocal,
   useList,
   useSignedInName,
@@ -1256,7 +1258,7 @@ export function WearablesScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const projectList = useList("project");
   const sourceList = useList("sos_source");
   const [cases, setCases] = useState<CaseSummary[]>([]);

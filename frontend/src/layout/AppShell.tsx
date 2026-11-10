@@ -11,7 +11,7 @@ import { formatUserLabel } from "../screens/shared";
 import bqLogo from "../assets/bq-logo-white.png";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
-type NotifTab = "all" | "esc" | "over" | "soon";
+type NotifTab = "all" | "esc" | "over" | "soon" | "report";
 
 function fmtNotifAge(hours: number) {
   const abs = Math.abs(hours);
@@ -226,11 +226,16 @@ function isActive(current: Route, item: Route): boolean {
   if (current.name === "new" && item.name === "list") return current.type === item.type;
   if (current.name === "dashboard" && item.name === "dashboard") return true;
   if (current.name === "review" && item.name === "review") return true;
+  if (current.name === "reports" && item.name === "reports") return true;
   return href(current) === href(item);
 }
 
 function notificationHref(item: OverdueNotificationItem): string {
   const type = item.record_type;
+  if (type === "report" || item.href_hint === "reports") {
+    const reportId = item.case_id || item.id;
+    return href({ name: "reports", reportId, sign: true });
+  }
   if (type === "ai_camera" || type === "dashcam" || type === "speed" || type === "sos") {
     return href({ name: "list", type, caseId: item.id });
   }
@@ -271,7 +276,7 @@ export function AppShell({
   const notifPanelRef = useRef<HTMLDivElement | null>(null);
   const notifBtnRef = useRef<HTMLButtonElement | null>(null);
   const [overdue, setOverdue] = useState<{
-    counts: { all: number; esc: number; over: number; soon: number };
+    counts: { all: number; esc: number; over: number; soon: number; report?: number };
     items: OverdueNotificationItem[];
     deadlines?: {
       High?: number;
@@ -282,6 +287,8 @@ export function AppShell({
       escalate?: number;
     };
   } | null>(null);
+  const isHse = user?.role === "dept_hse";
+  const isPm = user?.role === "receiver" || user?.role === "project_pm";
 
   const accessLabel = useMemo(() => {
     if (user?.role === "admin") return "All projects";
@@ -361,7 +368,13 @@ export function AppShell({
   useEffect(() => {
     const onOpen = (event: Event) => {
       const tab = (event as CustomEvent<{ tab?: NotifTab }>).detail?.tab;
-      if (tab === "all" || tab === "esc" || tab === "over" || tab === "soon") {
+      if (
+        tab === "all" ||
+        tab === "esc" ||
+        tab === "over" ||
+        tab === "soon" ||
+        tab === "report"
+      ) {
         setNotifTab(tab);
       }
       setNotifOpen(true);
@@ -370,9 +383,50 @@ export function AppShell({
     return () => window.removeEventListener("scc-open-notifications", onOpen);
   }, []);
 
+  const notifTabs = useMemo(() => {
+    if (isPm) {
+      // PM only receives monthly-report notices — no other tabs needed.
+      return [["all", "All", overdue?.counts.all ?? 0]] as const;
+    }
+    if (isHse) {
+      return [
+        ["all", "All", overdue?.counts.all ?? 0],
+        ["esc", "Escalated", overdue?.counts.esc ?? 0],
+        ["report", "Reports", overdue?.counts.report ?? 0],
+      ] as const;
+    }
+    return [
+      ["all", "All", overdue?.counts.all ?? 0],
+      ["esc", "Escalated", overdue?.counts.esc ?? 0],
+      ["over", "Overdue", overdue?.counts.over ?? 0],
+      ["soon", "Due soon", overdue?.counts.soon ?? 0],
+    ] as const;
+  }, [isHse, isPm, overdue?.counts]);
+
+  useEffect(() => {
+    // Role-specific panels hide some tabs — snap back if needed.
+    if (
+      isPm &&
+      (notifTab === "esc" ||
+        notifTab === "over" ||
+        notifTab === "soon" ||
+        notifTab === "report")
+    ) {
+      setNotifTab("all");
+    }
+    if (isHse && (notifTab === "over" || notifTab === "soon")) {
+      setNotifTab("all");
+    }
+  }, [isHse, isPm, notifTab]);
+
   const notifItems = useMemo(() => {
     const items = overdue?.items || [];
     if (notifTab === "all") return items;
+    if (notifTab === "report") {
+      return items.filter(
+        (item) => item.state === "report" || item.record_type === "report",
+      );
+    }
     return items.filter((item) => item.state === notifTab);
   }, [overdue, notifTab]);
 
@@ -384,14 +438,33 @@ export function AppShell({
     return false;
   }
 
+  // Keep the header box in sync with Review & Records ?case= search.
+  useEffect(() => {
+    if (route.name !== "review") return;
+    setSearch(route.caseId || "");
+  }, [route]);
+
   function onSearchSubmit(event: FormEvent) {
     event.preventDefault();
     const q = search.trim();
-    if (!q) return;
-    window.location.hash = href({ name: "review", caseId: undefined });
-    window.setTimeout(() => {
-      window.location.hash = `#/review?case=${encodeURIComponent(q)}`;
-    }, 0);
+    if (!q) {
+      // Empty enter clears an active Review search and restores the full list.
+      if (route.name === "review") {
+        window.location.hash = href({ name: "review" });
+      }
+      return;
+    }
+    // Always bump the hash so Review & Records re-applies the query even if
+    // we are already on that page with the same search text.
+    const target = href({ name: "review", caseId: q });
+    if (window.location.hash === target) {
+      window.location.hash = href({ name: "review" });
+      window.setTimeout(() => {
+        window.location.hash = target;
+      }, 0);
+      return;
+    }
+    window.location.hash = target;
   }
 
   const notifCount = overdue?.counts.all ?? 0;
@@ -474,7 +547,18 @@ export function AppShell({
             </svg>
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSearch(next);
+                if (
+                  !next.trim() &&
+                  route.name === "review" &&
+                  "caseId" in route &&
+                  route.caseId
+                ) {
+                  window.location.hash = href({ name: "review" });
+                }
+              }}
               placeholder="Search case ID, driver or asset"
               aria-label="Search records"
             />
@@ -508,21 +592,16 @@ export function AppShell({
             <div className="nh">
               <div>
                 <b>Notifications</b>
-                <span className="muted">close-out deadlines</span>
+                <span className="muted">
+                  {isPm ? "monthly reports" : "close-out deadlines"}
+                </span>
               </div>
               <button className="iconbtn" type="button" onClick={() => setNotifOpen(false)}>
                 ×
               </button>
             </div>
             <div className="npanel-tabs">
-              {(
-                [
-                  ["all", "All", overdue?.counts.all ?? 0],
-                  ["esc", "Escalated", overdue?.counts.esc ?? 0],
-                  ["over", "Overdue", overdue?.counts.over ?? 0],
-                  ["soon", "Due soon", overdue?.counts.soon ?? 0],
-                ] as const
-              ).map(([id, label, n]) => (
+              {notifTabs.map(([id, label, n]) => (
                 <button
                   key={id}
                   type="button"
@@ -533,28 +612,32 @@ export function AppShell({
                 </button>
               ))}
             </div>
-            <p className="npanel-hint">
-              Deadlines: High {overdue?.deadlines?.High ?? 24} h · Medium{" "}
-              {overdue?.deadlines?.Medium ?? 72} h / 3 days · Low{" "}
-              {overdue?.deadlines?.Low ?? 168} h / 7 days · SOS{" "}
-              {overdue?.deadlines?.SOS ?? 2} h. Escalation after{" "}
-              {overdue?.deadlines?.escalate ?? 2}× the deadline.
-            </p>
+            {!isPm ? (
+              <p className="npanel-hint">
+                Deadlines: High {overdue?.deadlines?.High ?? 24} h · Medium{" "}
+                {overdue?.deadlines?.Medium ?? 72} h / 3 days · Low{" "}
+                {overdue?.deadlines?.Low ?? 168} h / 7 days · SOS{" "}
+                {overdue?.deadlines?.SOS ?? 2} h. Escalation after{" "}
+                {overdue?.deadlines?.escalate ?? 2}× the deadline.
+              </p>
+            ) : null}
             <div className="npanel-body">
               {!notifItems.length ? (
                 <p className="empty">Nothing in this list.</p>
               ) : (
                 notifItems.slice(0, 60).map((item) => {
-                  const tone = riskTone(item.risk_level || item.risk_key);
+                  const isReport = item.state === "report" || item.record_type === "report";
+                  const tone = isReport ? "med" : riskTone(item.risk_level || item.risk_key);
                   const overdueAge = item.over_hours ?? Math.max(0, item.age_hours - (item.deadline_hours || 0));
-                  const right =
-                    item.state === "soon"
+                  const right = isReport
+                    ? "Sign"
+                    : item.state === "soon"
                       ? `${fmtNotifAge(item.left_hours ?? 0)} left`
                       : `+${fmtNotifAge(overdueAge)}`;
                   return (
                     <a
                       key={item.id}
-                      className={`nitem nitem-risk-${tone}`}
+                      className={`nitem nitem-risk-${tone}${isReport ? " nitem-report" : ""}`}
                       href={notificationHref(item)}
                       onClick={() => setNotifOpen(false)}
                     >

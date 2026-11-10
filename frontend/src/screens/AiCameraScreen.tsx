@@ -29,10 +29,12 @@ import { safelifeStatusOf, useIntegSettings } from "../lib/integSettings";
 import { href } from "../lib/routing";
 import { AiCameraRecordDrawer } from "./AiCameraRecordDrawer";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
-import {SelectList,
+import {
+  SelectList,
   SignedInNameField,
   StatusPill,
   RiskPill,
+  bannerYear,
   nowLocal,
   todayIso,
   useList,
@@ -1556,7 +1558,7 @@ export function AiCameraScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const projectList = useList("project");
   const categoryList = useList("ai_camera_category");
   const alertTypeList = useList("alert_type");

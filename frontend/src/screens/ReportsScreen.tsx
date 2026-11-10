@@ -471,6 +471,15 @@ function weeklyReportId(day: Date, projectName: string, index: number) {
   return `WR-${year}-W${String(week).padStart(2, "0")}-${projectCode(projectName, index)}`;
 }
 
+function monthlySignatureStatus(packet?: ReportPacket): string {
+  const hseSigned = Boolean(packet?.signed);
+  const pmSigned = Boolean(packet?.pm_signed);
+  if (hseSigned && pmSigned) return "Signed";
+  if (!hseSigned && !pmSigned) return "Awaiting signatures";
+  if (!hseSigned) return "Awaiting HSE signature";
+  return "Awaiting PM signature";
+}
+
 function summarizeScoped(
   kind: ReportTab,
   id: string,
@@ -483,16 +492,28 @@ function summarizeScoped(
   const rows = casesInScope(cases, scope, fromIso, toIso);
   const packetStatus = packet?.status || "";
   // Do not use /sign/ here — it also matches "Signed".
+  const compiling = /progress|compil/i.test(packetStatus);
+  const monthlyComplete =
+    Boolean(packet?.signed) && Boolean(packet?.pm_signed);
   const signed =
     kind === "monthly"
-      ? Boolean(packet?.pm_signed)
+      ? monthlyComplete
       : Boolean(packet?.signed) || /^signed$/i.test(packetStatus);
+  // Monthly status is always derived from who signed — never trust stale
+  // Issued / Ready to issue / Awaiting PM labels from older packets.
+  const status =
+    kind === "monthly"
+      ? compiling
+        ? "Compiling"
+        : monthlySignatureStatus(packet)
+      : compiling
+        ? "Compiling"
+        : packet?.status || "Generated";
   const awaiting =
-    /awaiting/i.test(packetStatus) &&
-    !(kind === "monthly" ? packet?.pm_signed : packet?.signed || /^signed$/i.test(packetStatus));
-  const ready = /ready/i.test(packetStatus);
-  const issued = /issued/i.test(packetStatus);
-  const compiling = /progress|compil/i.test(packetStatus);
+    kind === "monthly"
+      ? !compiling && !monthlyComplete
+      : /awaiting/i.test(packetStatus) &&
+        !(packet?.signed || /^signed$/i.test(packetStatus));
   const a = new Date(`${fromIso}T00:00:00`);
   const periodLabel =
     kind === "monthly"
@@ -520,26 +541,24 @@ function summarizeScoped(
         : packet?.generated_at
           ? `${formatDay(packet.generated_at)} · auto`
           : `${formatDay(fromIso)}, 00:00 · auto`,
-    status:
-      packet?.status === "Issued"
-        ? "Issued to PM"
+    status,
+    statusTone: signed
+      ? "signed"
+      : awaiting
+        ? "awaiting"
         : compiling
-          ? "Compiling"
-          : packet?.status || (kind === "monthly" ? "Ready to issue" : "Generated"),
-    statusTone: issued
-      ? "issued"
-      : ready
-        ? "ready"
-        : signed
-          ? "signed"
-          : awaiting
-            ? "awaiting"
-            : compiling
-              ? "compiling"
-              : "generated",
+          ? "compiling"
+          : "generated",
     compiling,
     cases: rows,
-    packet,
+    packet:
+      kind === "monthly" && packet
+        ? {
+            ...packet,
+            status,
+            issued: null,
+          }
+        : packet,
   };
 }
 
@@ -712,6 +731,77 @@ function topAiCategories(cases: CaseSummary[], limit = 8) {
 
 function overdueCases(cases: CaseSummary[]) {
   return cases.filter((row) => isOverdue(row));
+}
+
+function formatCoverDateRange(fromIso: string, toIso?: string) {
+  const fmt = (iso: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (!m) return iso;
+    return `${MONTHS[Number(m[2]) - 1]} ${String(Number(m[3])).padStart(2, "0")} ${m[1]}`;
+  };
+  if (!toIso) return fmt(fromIso);
+  return `${fmt(fromIso)} - ${fmt(toIso)}`;
+}
+
+function observationImageUrl(row: CaseSummary): string | null {
+  for (const key of [
+    "observation_picture",
+    "violation_picture",
+    "fms_evidence",
+    "close_out_picture",
+    "worker_picture",
+    "itqan_record_picture",
+  ]) {
+    const raw = caseField(row, key);
+    if (!raw) continue;
+    const url = resolveMediaUrl(raw);
+    if (url) return url;
+  }
+  return null;
+}
+
+function observationDescription(row: CaseSummary): string {
+  return (
+    caseField(row, "alert_summary") ||
+    caseField(row, "observation_details") ||
+    caseField(row, "description") ||
+    caseField(row, "remarks") ||
+    row.title ||
+    "—"
+  );
+}
+
+function observationCloseOut(row: CaseSummary): string {
+  return (
+    caseField(row, "close_out_action") ||
+    caseField(row, "close_out_report") ||
+    (row.status === "closed" ? "Closed" : "Pending close-out")
+  );
+}
+
+function observationLocation(row: CaseSummary): string {
+  return (
+    caseField(row, "location") ||
+    caseField(row, "position") ||
+    caseField(row, "camera_location") ||
+    scopeOf(row)
+  );
+}
+
+function observationRiskLabel(row: CaseSummary): string {
+  if (row.record_type === "sos") return "NA";
+  const risk = (row.risk_level || "").replace(/\s*Risk$/i, "").trim();
+  if (/positive/i.test(risk) || /positive/i.test(row.title || "")) return "Positive";
+  return risk || "—";
+}
+
+function documentNoForScope(scope: string) {
+  const code = (scope || "SCC")
+    .replace(/[^A-Za-z0-9]+/g, "")
+    .slice(0, 3)
+    .toUpperCase()
+    .padEnd(3, "X");
+  return `BQ-SCC - ${code}`;
 }
 
 function riskStats(cases: CaseSummary[]) {
@@ -922,15 +1012,21 @@ function ReportViewer({
     !report.packet?.signed &&
     user?.role === "dept_hse" &&
     Boolean(user.capabilities.sign_reports);
-  const canSignMonthly =
+  const monthlyAwaiting =
+    report.kind === "monthly" && /awaiting/i.test(report.status);
+  const canSignMonthlyHse =
     signMode &&
-    report.kind === "monthly" &&
+    monthlyAwaiting &&
+    !report.packet?.signed &&
+    user?.role === "dept_hse" &&
+    Boolean(user.capabilities.sign_reports);
+  const canSignMonthlyPm =
+    signMode &&
+    monthlyAwaiting &&
     !report.packet?.pm_signed &&
-    !report.packet?.issued &&
-    /awaiting/i.test(report.status) &&
-    user?.role === "receiver" &&
+    (user?.role === "receiver" || user?.role === "project_pm") &&
     Boolean(user.capabilities.sign_monthly_reports);
-  const canSignHere = canSignWeekly || canSignMonthly;
+  const canSignHere = canSignWeekly || canSignMonthlyHse || canSignMonthlyPm;
 
   async function submitSignature() {
     if (!canSignHere || !sigFile || signing) return;
@@ -959,28 +1055,13 @@ function ReportViewer({
       : report.kind === "weekly"
         ? "SCC Weekly Report"
         : "SCC Monthly Report";
-  const docTitle =
-    report.kind === "daily"
-      ? "SCC DAILY REPORT"
-      : report.kind === "weekly"
-        ? "SCC WEEKLY REPORT"
-        : "SCC MONTHLY REPORT";
   const byType = typeStats(report.cases);
   const byRisk = riskStats(report.cases);
-  const aiCats = useMemo(
-    () =>
-      report.kind === "daily" || report.kind === "weekly"
-        ? topAiCategories(report.cases)
-        : [],
-    [report.cases, report.kind],
+  const overdueRows = useMemo(() => overdueCases(report.cases), [report.cases]);
+  const coverDateRange = formatCoverDateRange(
+    report.periodIso,
+    report.periodEndIso,
   );
-  const overdueRows = useMemo(
-    () => (report.kind === "weekly" ? overdueCases(report.cases) : []),
-    [report.cases, report.kind],
-  );
-  const periodText = report.periodEndIso
-    ? `${formatDay(report.periodIso)} – ${formatDay(report.periodEndIso)}`
-    : formatDay(report.periodIso);
   const generatedAt = formatGeneratedAt();
   const distribution =
     report.kind === "monthly"
@@ -990,18 +1071,44 @@ function ReportViewer({
         : "SCC Supervisor";
   const subtitlePeriod =
     report.kind === "monthly" ? report.periodLabel : formatDay(report.periodIso);
-  const VIEW_RECORD_LIMIT = 25;
   const sortedCases = useMemo(
     () =>
       [...report.cases].sort((a, b) =>
-        `${b.date}${b.created_at}`.localeCompare(`${a.date}${a.created_at}`),
+        `${a.date}${a.created_at}`.localeCompare(`${b.date}${b.created_at}`),
       ),
     [report.cases],
   );
-  const visibleCases =
-    report.kind === "monthly" ? sortedCases.slice(0, VIEW_RECORD_LIMIT) : sortedCases;
-  const truncatedMonthly =
-    report.kind === "monthly" && sortedCases.length > VIEW_RECORD_LIMIT;
+  const weekParts = useMemo(() => {
+    const day = new Date(`${report.periodIso}T00:00:00`);
+    return Number.isNaN(day.getTime())
+      ? { year: new Date().getFullYear(), week: report.cases[0]?.week_number || 1 }
+      : sundayWeekParts(day);
+  }, [report.periodIso, report.cases]);
+  const coverYear =
+    /^(\d{4})/.exec(report.periodIso)?.[1] || String(weekParts.year);
+  const coverBandTitle =
+    report.kind === "weekly"
+      ? `SCC Report Week NO. (${weekParts.week}), ${weekParts.year}`
+      : report.kind === "monthly"
+        ? `SCC Report Month (${report.periodLabel || subtitlePeriod}), ${coverYear}`
+        : `SCC Report Day (${formatDay(report.periodIso)}), ${coverYear}`;
+  const coverKindTitle =
+    report.kind === "weekly"
+      ? "Weekly Report"
+      : report.kind === "monthly"
+        ? "Monthly Report"
+        : "Daily Report";
+  const hseSigned = Boolean(report.packet?.signed);
+  const pmSigned = Boolean(report.packet?.pm_signed);
+  const hseReviewerName = report.packet?.signed?.by || "Dept HSE";
+  const pmReviewerName = report.packet?.pm_signed?.by || "Project PM";
+  const weeklyReviewerName = report.packet?.signed?.by || "Dept HSE";
+  const hseReviewerStatus = hseSigned ? "Signed" : "Awaiting Dept HSE signature";
+  const pmReviewerStatus = pmSigned ? "Signed" : "Awaiting Project PM signature";
+  const weeklyIsSigned = Boolean(report.packet?.signed);
+  const weeklyReviewerStatus = weeklyIsSigned
+    ? "Signed"
+    : "Awaiting Dept HSE signature";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1061,454 +1168,512 @@ function ReportViewer({
         </div>
         <div className="drawer-body report-drawer-body">
           <article className="report-doc" id="report-print-root">
-            <div className="head">
-              <div className="report-doc-brand">
-                <img className="report-doc-logo" src={bqLogo} alt="Bin Quraya" />
-                <div className="report-doc-titles">
-                  <h1>{docTitle}</h1>
-                  <p className="sub">
-                    Safety Command Center · {report.scope} · {subtitlePeriod}
-                  </p>
-                </div>
-              </div>
-              <div className="report-doc-meta">
-                <div>{generatedAt}</div>
-                <div>Auto-generated by SCC Platform</div>
-              </div>
-            </div>
-
-            <div className="meta report-meta-band">
-              <div>
-                <span>Period</span>
-                <b>{periodText}</b>
-              </div>
-              <div>
-                <span>Prepared by</span>
-                <b>SCC Platform (system)</b>
-              </div>
-              <div>
-                <span>Scope</span>
-                <b>{report.scope}</b>
-              </div>
-              <div>
-                <span>Distribution</span>
-                <b>{distribution}</b>
-              </div>
-            </div>
-
-            <h3 className="report-sec">Key figures</h3>
-            <div className="kpis">
-              {(
-                [
-                  ["Records", report.records],
-                  ["Open", report.open],
-                  ["Under Review", report.underReview],
-                  ["Closed", report.closed],
-                  ["Overdue", report.overdue],
-                  ["High risk", report.highRisk],
-                ] as const
-              ).map(([label, value]) => (
-                <div className="kpi" key={label}>
-                  <span>{label}</span>
-                  <b>{value}</b>
-                </div>
-              ))}
-            </div>
-
-            <h3 className="report-sec">Observations and violations by type</h3>
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th className="num">Total</th>
-                  <th className="num">Open</th>
-                  <th className="num">Under Review</th>
-                  <th className="num">Closed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byType.map((row) => (
-                  <tr key={row.label}>
-                    <td>{row.label}</td>
-                    <td className="num">{row.total}</td>
-                    <td className="num">{row.open}</td>
-                    <td className="num">{row.underReview}</td>
-                    <td className="num">{row.closed}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <h3 className="report-sec">Risk level</h3>
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>Risk</th>
-                  <th className="num">Records</th>
-                  <th className="num">Closed on time</th>
-                  <th className="num">Overdue</th>
-                  <th>Deadline</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byRisk.map((row) => (
-                  <tr key={row.risk}>
-                    <td>{row.risk}</td>
-                    <td className="num">{row.records}</td>
-                    <td className="num">{row.closedOnTime}</td>
-                    <td className="num">{row.overdue}</td>
-                    <td>{row.deadline}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {aiCats.length ? (
               <>
-                <h3 className="report-sec">Top AI camera categories</h3>
-                <ul className="report-ai-cats">
-                  {aiCats.map((row) => (
-                    <li key={row.label}>
-                      <span>{row.label}</span>
-                      <b>{row.count}</b>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : report.kind === "daily" || report.kind === "weekly" ? (
-              <>
-                <h3 className="report-sec">Top AI camera categories</h3>
-                <p className="report-truncation-note">No AI camera observations in this period.</p>
-              </>
-            ) : null}
-
-            {report.kind === "daily" && dailyWeatherLoaded ? (
-              <>
-                <h3 className="report-sec">Weather monitoring · hourly readings</h3>
-                {dailyWeather.length ? (
-                  dailyWeather.map((station) => (
-                    <div key={`${station.project}-${station.location}`} className="report-wx-block">
-                      <p className="report-wx-sub">
-                        <b>{station.location}</b> · {station.project} · {station.dateLabel} · Week{" "}
-                        {station.week}
-                      </p>
-                      <div className="table-wrap report-wx-scroll">
-                        <table className="report-table report-wx-hourly">
-                          <thead>
-                            <tr>
-                              <th>Time</th>
-                              <th className="num">Wind (m/s)</th>
-                              <th className="num">Temp (°C)</th>
-                              <th className="num">RH (%)</th>
-                              <th className="num">CO2 (ppm)</th>
-                              <th className="num">PM2.5</th>
-                              <th className="num">PM10</th>
-                              <th className="num">Heat index</th>
-                              <th>Category</th>
-                              <th>Remarks / corrective actions</th>
-                              <th>Logged by</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {station.hours.map((row) =>
-                              row.status === "ok" ? (
-                                <tr key={row.hour}>
-                                  <td>{row.timeLabel}</td>
-                                  <td className="num">{row.wind}</td>
-                                  <td className="num">{row.temp}</td>
-                                  <td className="num">{row.rh}</td>
-                                  <td className="num">{row.co2}</td>
-                                  <td className="num">{row.pm25}</td>
-                                  <td className="num">{row.pm10}</td>
-                                  <td className="num">
-                                    <b>{row.heatIndex}</b>
-                                  </td>
-                                  <td>{row.category?.name}</td>
-                                  <td>{row.remarks}</td>
-                                  <td>{row.loggedBy}</td>
-                                </tr>
-                              ) : (
-                                <tr key={row.hour}>
-                                  <td>{row.timeLabel}</td>
-                                  <td colSpan={10} className="muted">
-                                    {row.status === "upcoming"
-                                      ? "Not due yet"
-                                      : "No reading logged"}
-                                  </td>
-                                </tr>
-                              ),
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
+                <section className="report-cover">
+                  <div className="report-cover-top">
+                    <div className="report-cover-company">BIN QURAYA COMPANY LIMITED</div>
+                    <div className="report-cover-logos">
+                      <img className="report-doc-logo" src={bqLogo} alt="Bin Quraya" />
                     </div>
-                  ))
-                ) : (
-                  <p className="report-truncation-note">
-                    No hourly weather readings logged for this day.
-                  </p>
-                )}
-              </>
-            ) : null}
-
-            {report.kind === "weekly" && weatherLog ? (
-              <>
-                <h3 className="report-sec">Weather monitoring · highest readings per day</h3>
-                {weatherLog.daysByStation.map((station) => (
-                  <div key={station.location} className="report-wx-block">
-                    <p className="report-wx-sub">
-                      <b>{station.location}</b> · {weatherLog.project} · Week {weatherLog.week}
-                    </p>
-                    <table className="report-table">
-                      <thead>
-                        <tr>
-                          <th>Day</th>
-                          <th className="num">Hours logged</th>
-                          <th className="num">Max wind (m/s)</th>
-                          <th className="num">Max temp (°C)</th>
-                          <th className="num">Max humidity (%)</th>
-                          <th className="num">Max CO2 (ppm)</th>
-                          <th className="num">Max PM10</th>
-                          <th className="num">Max heat index</th>
-                          <th>Category</th>
-                        </tr>
-                      </thead>
+                  </div>
+                  <div className="report-cover-titles">
+                    <h1>Bin Quraya Company Limited</h1>
+                    <h2>Safety Command Center (SCC)</h2>
+                    <h3>{report.scope}</h3>
+                    <h4>{coverKindTitle}</h4>
+                  </div>
+                  <div className="report-cover-frame">
+                    <div className="report-cover-band">{coverBandTitle}</div>
+                    <div className="report-cover-body">
+                      <p className="report-cover-hint">
+                        Weather monitoring, observation summary, and full record details follow.
+                      </p>
+                      <p className="report-cover-meta-line">{generatedAt}</p>
+                      <p className="report-cover-meta-line">Distribution · {distribution}</p>
+                    </div>
+                    <table className="report-cover-sign-table">
                       <tbody>
-                        {station.days.map((day) => (
-                          <tr key={day.dateIso}>
-                            <td>{day.dayLabel}</td>
-                            {day.hoursLogged > 0 ? (
-                              <>
-                                <td className="num">
-                                  {day.hoursLogged} / {day.hoursExpected}
-                                </td>
-                                <td className="num">{day.wind}</td>
-                                <td className="num">{day.temp}</td>
-                                <td className="num">{day.rh}</td>
-                                <td className="num">{day.co2}</td>
-                                <td className="num">{day.pm10}</td>
-                                <td className="num">
-                                  <b>{day.heatIndex}</b>
-                                </td>
-                                <td>{day.category.name}</td>
-                              </>
-                            ) : (
-                              <td colSpan={8} className="muted">
-                                No readings logged
-                              </td>
-                            )}
+                        <tr>
+                          <th>Rev</th>
+                          <td>00</td>
+                          <th>Date</th>
+                          <td>{coverDateRange}</td>
+                          <th>Prepared by</th>
+                          <td>BQCL SCC Team</td>
+                        </tr>
+                        {report.kind === "monthly" ? (
+                          <tr>
+                            <th>Prepared by</th>
+                            <td>
+                              <div className="report-cover-sig-slot">
+                                <span>BQCL SCC Team</span>
+                                <small>System compiled</small>
+                              </div>
+                            </td>
+                            <th>Review By — HSE Dept.</th>
+                            <td>
+                              <div className="report-cover-sig-slot">
+                                {hseSigned && weeklySignedImageUrl ? (
+                                  <img
+                                    className="report-signature-img"
+                                    src={weeklySignedImageUrl}
+                                    alt="Dept HSE signature"
+                                  />
+                                ) : null}
+                                <span>{hseReviewerName}</span>
+                                <small>{hseReviewerStatus}</small>
+                              </div>
+                            </td>
+                            <th>Review By — Project PM</th>
+                            <td>
+                              <div className="report-cover-sig-slot">
+                                {pmSigned && pmSignedImageUrl ? (
+                                  <img
+                                    className="report-signature-img"
+                                    src={pmSignedImageUrl}
+                                    alt="Project PM signature"
+                                  />
+                                ) : null}
+                                <span>{pmReviewerName}</span>
+                                <small>{pmReviewerStatus}</small>
+                              </div>
+                            </td>
                           </tr>
-                        ))}
+                        ) : (
+                          <tr>
+                            <th colSpan={2}>Prepared by</th>
+                            <td colSpan={2}>
+                              <div className="report-cover-sig-slot">
+                                <span>BQCL SCC Team</span>
+                                <small>
+                                  {report.kind === "daily" ? "Auto-compiled" : "System compiled"}
+                                </small>
+                              </div>
+                            </td>
+                            <th colSpan={1}>
+                              {report.kind === "weekly"
+                                ? "Review By — HSE Dept."
+                                : "Review By — SCC Supervisor"}
+                            </th>
+                            <td colSpan={1}>
+                              <div className="report-cover-sig-slot">
+                                {report.kind === "weekly" &&
+                                weeklyIsSigned &&
+                                weeklySignedImageUrl ? (
+                                  <img
+                                    className="report-signature-img"
+                                    src={weeklySignedImageUrl}
+                                    alt="Digital signature"
+                                  />
+                                ) : null}
+                                <span>
+                                  {report.kind === "weekly"
+                                    ? weeklyReviewerName
+                                    : "SCC Supervisor"}
+                                </span>
+                                <small>
+                                  {report.kind === "weekly"
+                                    ? weeklyReviewerStatus
+                                    : "Auto-compiled"}
+                                </small>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        <tr>
+                          <td colSpan={6} className="report-cover-docno">
+                            Document No. — {documentNoForScope(report.scope)}
+                          </td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>
-                ))}
-              </>
-            ) : null}
+                </section>
 
-            {report.kind === "monthly" && monthlyWeather.length ? (
-              <>
-                <h3 className="report-sec">Weather monitoring</h3>
-                <table className="report-table report-wx-monthly">
-                  <thead>
-                    <tr>
-                      <th>Station</th>
-                      <th className="num">Hours logged</th>
-                      <th className="num">Max temp °C</th>
-                      <th className="num">Max heat index</th>
-                      <th>Category</th>
-                      <th className="num">Max wind m/s</th>
-                      <th className="num">Max humidity %</th>
-                      <th className="num">Max PM10</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {monthlyWeather.map((row) => (
-                      <tr key={row.station}>
-                        <td>{row.station}</td>
-                        {row.hoursLogged > 0 ? (
-                          <>
-                            <td className="num">{row.hoursLogged}</td>
-                            <td className="num">{row.maxTemp}</td>
-                            <td className="num">
-                              <b>{row.maxHeatIndex}</b>
-                            </td>
-                            <td>{row.category.name}</td>
-                            <td className="num">{row.maxWind}</td>
-                            <td className="num">{row.maxHumidity}</td>
-                            <td className="num">{row.maxPm10}</td>
-                          </>
-                        ) : (
-                          <td colSpan={7} className="muted">
-                            No readings logged this month
-                          </td>
-                        )}
-                      </tr>
+                <section className="report-section-page">
+                  {report.kind === "daily" && dailyWeatherLoaded ? (
+                    <>
+                      <h3 className="report-sec">Weather monitoring · hourly readings</h3>
+                      {dailyWeather.length ? (
+                        dailyWeather.map((station) => (
+                          <div
+                            key={`${station.project}-${station.location}`}
+                            className="report-wx-block"
+                          >
+                            <p className="report-wx-sub">
+                              <b>{station.location}</b> · {station.project} · {station.dateLabel} ·
+                              Week {station.week}
+                            </p>
+                            <div className="table-wrap report-wx-scroll">
+                              <table className="report-table report-wx-hourly">
+                                <thead>
+                                  <tr>
+                                    <th>Time</th>
+                                    <th className="num">Wind (m/s)</th>
+                                    <th className="num">Temp (°C)</th>
+                                    <th className="num">RH (%)</th>
+                                    <th className="num">CO2 (ppm)</th>
+                                    <th className="num">PM2.5</th>
+                                    <th className="num">PM10</th>
+                                    <th className="num">Heat index</th>
+                                    <th>Category</th>
+                                    <th>Remarks / corrective actions</th>
+                                    <th>Logged by</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {station.hours.map((row) =>
+                                    row.status === "ok" ? (
+                                      <tr key={row.hour}>
+                                        <td>{row.timeLabel}</td>
+                                        <td className="num">{row.wind}</td>
+                                        <td className="num">{row.temp}</td>
+                                        <td className="num">{row.rh}</td>
+                                        <td className="num">{row.co2}</td>
+                                        <td className="num">{row.pm25}</td>
+                                        <td className="num">{row.pm10}</td>
+                                        <td className="num">
+                                          <b>{row.heatIndex}</b>
+                                        </td>
+                                        <td>{row.category?.name}</td>
+                                        <td>{row.remarks}</td>
+                                        <td>{row.loggedBy}</td>
+                                      </tr>
+                                    ) : (
+                                      <tr key={row.hour}>
+                                        <td>{row.timeLabel}</td>
+                                        <td colSpan={10} className="muted">
+                                          {row.status === "upcoming"
+                                            ? "Not due yet"
+                                            : "No reading logged"}
+                                        </td>
+                                      </tr>
+                                    ),
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="report-truncation-note">
+                          No hourly weather readings logged for this day.
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+
+                  {report.kind === "weekly" && weatherLog ? (
+                    <>
+                      <h3 className="report-sec">Weather monitoring · highest readings per day</h3>
+                      {weatherLog.daysByStation.map((station) => (
+                        <div key={station.location} className="report-wx-block">
+                          <p className="report-wx-sub">
+                            <b>{station.location}</b> · {weatherLog.project} · Week{" "}
+                            {weatherLog.week}
+                          </p>
+                          <table className="report-table">
+                            <thead>
+                              <tr>
+                                <th>Day</th>
+                                <th className="num">Hours logged</th>
+                                <th className="num">Max wind (m/s)</th>
+                                <th className="num">Max temp (°C)</th>
+                                <th className="num">Max humidity (%)</th>
+                                <th className="num">Max CO2 (ppm)</th>
+                                <th className="num">Max PM10</th>
+                                <th className="num">Max heat index</th>
+                                <th>Category</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {station.days.map((day) => (
+                                <tr key={day.dateIso}>
+                                  <td>{day.dayLabel}</td>
+                                  {day.hoursLogged > 0 ? (
+                                    <>
+                                      <td className="num">
+                                        {day.hoursLogged} / {day.hoursExpected}
+                                      </td>
+                                      <td className="num">{day.wind}</td>
+                                      <td className="num">{day.temp}</td>
+                                      <td className="num">{day.rh}</td>
+                                      <td className="num">{day.co2}</td>
+                                      <td className="num">{day.pm10}</td>
+                                      <td className="num">
+                                        <b>{day.heatIndex}</b>
+                                      </td>
+                                      <td>{day.category.name}</td>
+                                    </>
+                                  ) : (
+                                    <td colSpan={8} className="muted">
+                                      No readings logged
+                                    </td>
+                                  )}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </>
+                  ) : null}
+
+                  {report.kind === "monthly" ? (
+                    <>
+                      <h3 className="report-sec">Weather monitoring</h3>
+                      {monthlyWeather.length ? (
+                        <table className="report-table report-wx-monthly">
+                          <thead>
+                            <tr>
+                              <th>Station</th>
+                              <th className="num">Hours logged</th>
+                              <th className="num">Max temp °C</th>
+                              <th className="num">Max heat index</th>
+                              <th>Category</th>
+                              <th className="num">Max wind m/s</th>
+                              <th className="num">Max humidity %</th>
+                              <th className="num">Max PM10</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {monthlyWeather.map((row) => (
+                              <tr key={row.station}>
+                                <td>{row.station}</td>
+                                {row.hoursLogged > 0 ? (
+                                  <>
+                                    <td className="num">{row.hoursLogged}</td>
+                                    <td className="num">{row.maxTemp}</td>
+                                    <td className="num">
+                                      <b>{row.maxHeatIndex}</b>
+                                    </td>
+                                    <td>{row.category.name}</td>
+                                    <td className="num">{row.maxWind}</td>
+                                    <td className="num">{row.maxHumidity}</td>
+                                    <td className="num">{row.maxPm10}</td>
+                                  </>
+                                ) : (
+                                  <td colSpan={7} className="muted">
+                                    No readings logged this month
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <p className="report-truncation-note">
+                          No weather readings logged this month.
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+
+                  {report.kind === "weekly" && !weatherLog ? (
+                    <>
+                      <h3 className="report-sec">Weather monitoring</h3>
+                      <p className="report-truncation-note">
+                        No weekly weather log attached for this project week.
+                      </p>
+                    </>
+                  ) : null}
+
+                  {report.kind === "daily" && !dailyWeatherLoaded ? (
+                    <>
+                      <h3 className="report-sec">Weather monitoring</h3>
+                      <p className="report-truncation-note">Loading hourly weather readings…</p>
+                    </>
+                  ) : null}
+
+                  <h3 className="report-sec">Observation summary</h3>
+                  <div className="kpis">
+                    {(
+                      [
+                        ["Records", report.records],
+                        ["Open", report.open],
+                        ["Under Review", report.underReview],
+                        ["Closed", report.closed],
+                        ["Overdue", report.overdue],
+                        ["High risk", report.highRisk],
+                      ] as const
+                    ).map(([label, value]) => (
+                      <div className="kpi" key={label}>
+                        <span>{label}</span>
+                        <b>{value}</b>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </>
-            ) : null}
+                  </div>
 
-            <h3 className="report-sec">Record details</h3>
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>Case ID</th>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Scope</th>
-                  <th>Risk</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleCases.length ? (
-                  visibleCases.map((row) => (
-                    <tr key={row.id}>
-                      <td className="mono">{row.case_id}</td>
-                      <td>{formatDay(row.date)}</td>
-                      <td>{TYPE_FULL[row.record_type] ?? row.record_type}</td>
-                      <td>{scopeOf(row)}</td>
-                      <td>
-                        {row.record_type === "sos" ? "NA" : row.risk_level || "—"}
-                      </td>
-                      <td>{statusLabel(row.status)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6}>No records in this period.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            {truncatedMonthly ? (
-              <p className="report-truncation-note">
-                Showing {visibleCases.length} of {sortedCases.length}. The full log is in the
-                Excel export.
-              </p>
-            ) : null}
-
-            {report.kind === "weekly" ? (
-              <>
-                <h3 className="report-sec">Overdue items</h3>
-                <table className="report-table">
-                  <thead>
-                    <tr>
-                      <th>Case ID</th>
-                      <th>Type</th>
-                      <th>Risk</th>
-                      <th>Status</th>
-                      <th>Scope</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {overdueRows.length ? (
-                      overdueRows.map((row) => (
-                        <tr key={row.id}>
-                          <td className="mono">{row.case_id}</td>
-                          <td>{TYPE_FULL[row.record_type] ?? row.record_type}</td>
-                          <td>{row.record_type === "sos" ? "NA" : row.risk_level || "—"}</td>
-                          <td>{statusLabel(row.status)}</td>
-                          <td>{scopeOf(row)}</td>
-                        </tr>
-                      ))
-                    ) : (
+                  <h3 className="report-sec">Observations and violations by type</h3>
+                  <table className="report-table">
+                    <thead>
                       <tr>
-                        <td colSpan={5}>No overdue items in this period.</td>
+                        <th>Type</th>
+                        <th className="num">Total</th>
+                        <th className="num">Open</th>
+                        <th className="num">Under Review</th>
+                        <th className="num">Closed</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
-              </>
-            ) : null}
+                    </thead>
+                    <tbody>
+                      {byType.map((row) => (
+                        <tr key={row.label}>
+                          <td>{row.label}</td>
+                          <td className="num">{row.total}</td>
+                          <td className="num">{row.open}</td>
+                          <td className="num">{row.underReview}</td>
+                          <td className="num">{row.closed}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
 
-            <div className="report-signoff">
-              <div className="report-signoff-card">
-                <span>Prepared by</span>
-                <p>SCC Platform · auto</p>
-                <b>System compiled</b>
-                <small>—</small>
-              </div>
-              <div className="report-signoff-card">
-                <span>
-                  {report.kind === "monthly"
-                    ? "Reviewed & signed · Project PM"
-                    : "Reviewed & signed · Dept HSE"}
-                </span>
-                {report.kind === "weekly" && report.packet?.signed ? (
-                  <>
-                    <p>{report.packet.signed.by || "Dept HSE"}</p>
-                    {weeklySignedImageUrl ? (
-                      <img
-                        className="report-signature-img"
-                        src={weeklySignedImageUrl}
-                        alt="Dept HSE digital signature"
-                      />
-                    ) : null}
-                    <b>Signed</b>
-                    <small>
-                      {report.packet.signed.at
-                        ? formatDay(report.packet.signed.at)
-                        : "—"}
-                    </small>
-                  </>
-                ) : report.kind === "monthly" && report.packet?.pm_signed ? (
-                  <>
-                    <p>{report.packet.pm_signed.by || "Project PM"}</p>
-                    {pmSignedImageUrl ? (
-                      <img
-                        className="report-signature-img"
-                        src={pmSignedImageUrl}
-                        alt="Project PM digital signature"
-                      />
-                    ) : null}
-                    <b>Signed</b>
-                    <small>
-                      {report.packet.pm_signed.at
-                        ? formatDay(report.packet.pm_signed.at)
-                        : "—"}
-                    </small>
-                  </>
-                ) : (
-                  <b className="muted-strong">
-                    {report.kind === "weekly"
-                      ? "Awaiting Dept HSE signature"
-                      : report.kind === "monthly"
-                        ? "Awaiting Project PM signature"
-                        : "Weekly reports signed"}
-                  </b>
-                )}
-              </div>
-              <div className="report-signoff-card">
-                <span>Issued to · Project PM</span>
-                {report.kind === "monthly" && report.packet?.issued ? (
-                  <>
-                    <p>
-                      {report.packet.issued.to || "Project PM"}
-                      {report.packet.issued.email
-                        ? ` · ${report.packet.issued.email}`
-                        : ""}
-                    </p>
-                    <b>Issued</b>
-                    <small>
-                      {report.packet.issued.at
-                        ? formatDay(report.packet.issued.at)
-                        : "—"}
-                    </small>
-                  </>
-                ) : (
-                  <b className="muted-strong">
-                    {report.kind === "monthly"
-                      ? report.packet?.pm_signed
-                        ? "Ready to issue"
-                        : "Awaiting Project PM signature"
-                      : "Monthly report only"}
-                  </b>
-                )}
-              </div>
-            </div>
+                  <h3 className="report-sec">Risk level</h3>
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Risk</th>
+                        <th className="num">Records</th>
+                        <th className="num">Closed on time</th>
+                        <th className="num">Overdue</th>
+                        <th>Deadline</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {byRisk.map((row) => (
+                        <tr key={row.risk}>
+                          <td>{row.risk}</td>
+                          <td className="num">{row.records}</td>
+                          <td className="num">{row.closedOnTime}</td>
+                          <td className="num">{row.overdue}</td>
+                          <td>{row.deadline}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <h3 className="report-sec">All records in period</h3>
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Case ID</th>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Scope</th>
+                        <th>Risk</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedCases.length ? (
+                        sortedCases.map((row) => (
+                          <tr key={row.id}>
+                            <td className="mono">{row.case_id}</td>
+                            <td>{formatDay(row.date)}</td>
+                            <td>{TYPE_FULL[row.record_type] ?? row.record_type}</td>
+                            <td>{scopeOf(row)}</td>
+                            <td>{observationRiskLabel(row)}</td>
+                            <td>{statusLabel(row.status)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6}>No records in this period.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </section>
+
+                {sortedCases.map((row) => {
+                  const img = observationImageUrl(row);
+                  const closed = row.status === "closed";
+                  return (
+                    <section key={row.id} className="report-obs-page">
+                      <div className="report-obs-top">
+                        <div className="report-cover-company">BIN QURAYA COMPANY LIMITED</div>
+                        <img className="report-doc-logo sm" src={bqLogo} alt="Bin Quraya" />
+                      </div>
+                      <table className="report-obs-meta">
+                        <thead>
+                          <tr>
+                            <th>Department</th>
+                            <th>Contractor</th>
+                            <th>Location</th>
+                            <th>Date</th>
+                            <th>Risk level</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>{row.department || row.project || report.scope}</td>
+                            <td>BQ</td>
+                            <td>{observationLocation(row)}</td>
+                            <td>{formatDay(row.date)}</td>
+                            <td>{observationRiskLabel(row)}</td>
+                            <td className={closed ? "report-status-closed" : undefined}>
+                              {statusLabel(row.status)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <p className="report-obs-case">
+                        <span className="mono">{row.case_id}</span>
+                        <span>{TYPE_FULL[row.record_type] ?? row.record_type}</span>
+                      </p>
+                      {img ? (
+                        <div className="report-obs-photo">
+                          <img src={img} alt={`${row.case_id} evidence`} />
+                        </div>
+                      ) : (
+                        <p className="report-truncation-note">No picture attached to this record.</p>
+                      )}
+                      <div className="report-obs-details">
+                        <h4>Observation details</h4>
+                        <p>
+                          <b>Description:</b> {observationDescription(row)}
+                        </p>
+                        <p>
+                          <b>Close out action:</b> {observationCloseOut(row)}
+                        </p>
+                      </div>
+                    </section>
+                  );
+                })}
+
+                <section className="report-section-page">
+                  <h3 className="report-sec">Overdue items</h3>
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Case ID</th>
+                        <th>Type</th>
+                        <th>Risk</th>
+                        <th>Status</th>
+                        <th>Scope</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overdueRows.length ? (
+                        overdueRows.map((row) => (
+                          <tr key={row.id}>
+                            <td className="mono">{row.case_id}</td>
+                            <td>{TYPE_FULL[row.record_type] ?? row.record_type}</td>
+                            <td>{observationRiskLabel(row)}</td>
+                            <td>{statusLabel(row.status)}</td>
+                            <td>{scopeOf(row)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5}>No overdue items in this period.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </section>
+              </>
           </article>
         </div>
         {canSignHere ? (
@@ -1557,7 +1722,13 @@ function ReportViewer({
   return createPortal(ui, document.body);
 }
 
-export function ReportsScreen() {
+export function ReportsScreen({
+  reportId,
+  openSign = false,
+}: {
+  reportId?: string;
+  openSign?: boolean;
+} = {}) {
   const { user } = useAuth();
   const [data, setData] = useState<ReportsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1566,6 +1737,7 @@ export function ReportsScreen() {
   const [signingReportId, setSigningReportId] = useState<string | null>(null);
   const [viewingWeather, setViewingWeather] = useState<WeeklyWeatherLog | null>(null);
   const [weatherLogs, setWeatherLogs] = useState<WeeklyWeatherLog[]>([]);
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false);
 
   const loadReports = useCallback(() => {
     fetchReports()
@@ -1634,6 +1806,19 @@ export function ReportsScreen() {
   const [dailyWeatherLoaded, setDailyWeatherLoaded] = useState(false);
 
   useEffect(() => {
+    if (!reportId || deepLinkHandled || !data) return;
+    const match =
+      weekly.find((row) => row.id === reportId) ||
+      monthly.find((row) => row.id === reportId) ||
+      daily.find((row) => row.id === reportId);
+    if (!match) return;
+    setTab(match.kind);
+    setViewing(match);
+    if (openSign) setSigningReportId(match.id);
+    setDeepLinkHandled(true);
+  }, [reportId, openSign, deepLinkHandled, data, daily, weekly, monthly]);
+
+  useEffect(() => {
     if (!viewing || viewing.kind !== "weekly") {
       setViewingWeatherLog(null);
       return;
@@ -1699,7 +1884,8 @@ export function ReportsScreen() {
   }, [viewing]);
 
   const awaitingSign = weekly.filter((r) => r.statusTone === "awaiting").length;
-  const readyIssue = monthly.filter((r) => /ready/i.test(r.status)).length;
+  const monthlyAwaiting = monthly.filter((r) => r.statusTone === "awaiting").length;
+  const monthlySigned = monthly.filter((r) => r.statusTone === "signed").length;
 
   const rows = tab === "daily" ? daily : tab === "weekly" ? weekly : monthly;
 
@@ -1717,8 +1903,8 @@ export function ReportsScreen() {
             SCC <em>REPORTS</em>
           </h1>
           <p>
-            Auto-generated daily, weekly and monthly <i>•</i> Signed by Dept HSE{" "}
-            <i>•</i> Issued to Project PM
+            Auto-generated daily, weekly and monthly <i>•</i> Weekly signed by Dept
+            HSE <i>•</i> Monthly signed by Dept HSE &amp; Project PM
           </p>
         </div>
       </section>
@@ -1750,10 +1936,10 @@ export function ReportsScreen() {
         <article className="v1-kpi">
           <div className="t">Monthly · day {schedule.monthlyDay}</div>
           <div className="v" style={{ fontSize: 18 }}>
-            Issued to the Project PM
+            Dept HSE &amp; Project PM sign
           </div>
           <div className="s">
-            Once every weekly report of the month is signed · {readyIssue} ready
+            {monthlyAwaiting} awaiting · {monthlySigned} signed
           </div>
         </article>
       </div>
@@ -1783,7 +1969,7 @@ export function ReportsScreen() {
         {!rows.length ? (
           <p className="state">No {tab} reports yet.</p>
         ) : (
-          <div className="table-wrap">
+          <div className="table-wrap reports-list-scroll">
             <table className="tbl review-tbl reports-tbl">
               <thead>
                 <tr>
@@ -1830,9 +2016,19 @@ export function ReportsScreen() {
                             {formatDay(row.packet.signed.at)}
                           </small>
                         ) : null}
-                        {row.kind === "monthly" && row.packet?.pm_signed?.at ? (
+                        {row.kind === "monthly" &&
+                        (row.packet?.signed?.at || row.packet?.pm_signed?.at) ? (
                           <small className="report-signed-at muted">
-                            {formatDay(row.packet.pm_signed.at)}
+                            {[
+                              row.packet?.signed?.at
+                                ? `HSE ${formatDay(row.packet.signed.at)}`
+                                : null,
+                              row.packet?.pm_signed?.at
+                                ? `PM ${formatDay(row.packet.pm_signed.at)}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </small>
                         ) : null}
                       </div>
@@ -1865,8 +2061,25 @@ export function ReportsScreen() {
                         ) : null}
                         {row.kind === "monthly" &&
                         row.statusTone === "awaiting" &&
+                        !row.packet?.signed &&
+                        user?.role === "dept_hse" &&
+                        user.capabilities.sign_reports ? (
+                          <button
+                            type="button"
+                            className="btn sm primary"
+                            title="Open report to upload signature and sign as Dept HSE"
+                            onClick={() => {
+                              setSigningReportId(row.id);
+                              setViewing(row);
+                            }}
+                          >
+                            Sign
+                          </button>
+                        ) : null}
+                        {row.kind === "monthly" &&
+                        row.statusTone === "awaiting" &&
                         !row.packet?.pm_signed &&
-                        user?.role === "receiver" &&
+                        (user?.role === "receiver" || user?.role === "project_pm") &&
                         user.capabilities.sign_monthly_reports ? (
                           <button
                             type="button"
@@ -1979,19 +2192,25 @@ export function ReportsScreen() {
           onClose={() => {
             setViewing(null);
             setSigningReportId(null);
+            if (reportId && typeof window !== "undefined") {
+              // Drop deep-link query so closing doesn't reopen the same report.
+              window.location.hash = "#/reports";
+            }
           }}
           onSigned={(packet) => {
             setSigningReportId(null);
-            const nextTone =
-              packet.kind === "monthly" || /ready/i.test(packet.status || "")
-                ? "ready"
-                : "signed";
+            const status = packet.status || "Signed";
+            const nextTone = /awaiting/i.test(status)
+              ? "awaiting"
+              : /signed/i.test(status)
+                ? "signed"
+                : "generated";
             setViewing((prev) =>
               prev
                 ? {
                     ...prev,
                     packet,
-                    status: packet.status || (prev.kind === "monthly" ? "Ready to issue" : "Signed"),
+                    status,
                     statusTone: nextTone,
                   }
                 : null,

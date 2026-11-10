@@ -3923,6 +3923,8 @@ html.theme-dark .login-card input:disabled {
 .nitem.nitem-risk-high{border-left-color:var(--red)}
 .nitem.nitem-risk-med{border-left-color:var(--amber)}
 .nitem.nitem-risk-low{border-left-color:#a3a38a}
+.nitem.nitem-report{border-left-color:var(--red)}
+.nitem-meta.state-report{color:var(--red)}
 .nitem:hover{background:var(--surface-2)}
 .nitem-main{min-width:0;flex:1}
 .nitem b{display:block;font-size:12.5px;font-weight:700;line-height:1.3;color:var(--ink)}
@@ -3978,7 +3980,8 @@ html.theme-dark .login-card input:disabled {
 .v1-filters .seg button:disabled{opacity:.45;cursor:not-allowed;color:var(--muted)}
 .v1-filters select.sel{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 26px 6px 9px;font-size:13px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px;background-repeat:no-repeat}
 .v1-filters input.inp[type=date]{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:13px}
-.v1-spark{display:block;margin-top:2px}
+.v1-spark{display:block;margin-top:2px;overflow:visible}
+.v1-spark-host{overflow:visible;min-width:0}
 .v1-dual-chart{display:block;width:100%;height:auto;max-height:260px}
 .v1-cmp-note{gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
 .v1-month-chart{display:block;width:100%;max-height:168px;height:auto}
@@ -4753,6 +4756,19 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .reports-tabs button em{font-style:normal;font-weight:700;color:var(--muted);margin-left:4px}
 .reports-tabs button.on{color:var(--ink);border-bottom-color:var(--red)}
 .reports-tabs button.on em{color:var(--red)}
+/* ~9 report rows visible; scroll for the rest (daily / weekly / monthly). */
+.reports-v1 .reports-list-scroll{
+  max-height:calc(2.6rem + 9 * 2.85rem);
+  overflow:auto;
+  overscroll-behavior:contain;
+}
+.reports-v1 .reports-list-scroll thead th{
+  position:sticky;
+  top:0;
+  z-index:2;
+  background:var(--surface-2, #f3f3f3);
+  box-shadow:0 1px 0 var(--line);
+}
 .reports-tbl .overdue-link{border:0;background:none;color:var(--red);font-weight:700;cursor:pointer;padding:0;font:inherit}
 /* Action col: keep View / Sign on one line (override review-tbl last-col squeeze) */
 .reports-tbl th:last-child,
@@ -5016,6 +5032,42 @@ label.radio-pill,.radio-pill,.radio-row > label.radio,.radio-row > .radio{
 .report-doc .report-wx-monthly th{background:#1d1c1f;color:#fff;border-bottom-color:#1d1c1f;padding:10px 8px}
 .report-doc .report-wx-monthly td{padding:10px 8px;color:#4a474c}
 .report-doc .report-wx-monthly td:first-child{color:#1d1c1f;font-weight:600}
+
+.report-cover{display:flex;flex-direction:column;gap:0;min-height:640px;margin:0 0 28px;padding:0 0 18px;border-bottom:1px dashed #dcd6cf}
+.report-cover-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+.report-cover-company{font-size:12px;font-weight:700;letter-spacing:.04em;color:#4a474c}
+.report-cover-titles{text-align:center;margin:4px 0 16px}
+.report-cover-titles h1,.report-cover-titles h2{margin:0 0 6px;font-size:18px;font-weight:800;text-decoration:underline;text-underline-offset:3px;color:#111}
+.report-cover-titles h3{margin:10px 0 4px;font-size:16px;font-weight:700;color:#1d1c1f}
+.report-cover-titles h4{margin:0;font-size:15px;font-weight:700;color:#1d1c1f}
+.report-cover-frame{flex:1;display:flex;flex-direction:column;border:1.5px solid #333;min-height:360px;background:#fff}
+.report-cover-band{background:#C8102E;color:#fff;text-align:center;font-weight:800;font-size:15px;padding:10px 12px;border-bottom:1.5px solid #333}
+.report-cover-body{flex:1;padding:16px;min-height:120px}
+.report-cover-hint{margin:0 0 10px;font-size:13px;color:#4a474c}
+.report-cover-meta-line{margin:0 0 4px;font-size:12px;color:#7c777b}
+.report-cover-sign-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:auto}
+.report-cover-sign-table th,.report-cover-sign-table td{border-top:1px solid #333;border-right:1px solid #333;padding:8px 10px;vertical-align:top;color:#1d1c1f}
+.report-cover-sign-table th:last-child,.report-cover-sign-table td:last-child{border-right:0}
+.report-cover-sign-table th{background:#f3f3f3;font-weight:700;white-space:nowrap;width:1%}
+.report-cover-sig-slot{min-height:56px}
+.report-cover-sig-slot span{display:block;font-weight:700}
+.report-cover-sig-slot small{display:block;margin-top:4px;color:#7c777b;font-size:11px}
+.report-cover-docno{text-align:left;font-weight:700;background:#fafafa}
+.report-section-page{margin:0 0 24px}
+.report-obs-page{margin:28px 0;padding:16px 0 8px;border-top:1px dashed #dcd6cf}
+.report-obs-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #dcd6cf}
+.report-doc-logo.sm{height:40px}
+.report-obs-meta{width:100%;border-collapse:collapse;margin:0 0 12px;font-size:12.5px}
+.report-obs-meta th{background:#C8102E;color:#fff;padding:8px 6px;text-align:left;font-weight:700;border:1px solid #9e0c24}
+.report-obs-meta td{padding:9px 6px;border:1px solid #e2c9ce;vertical-align:top;color:#1d1c1f}
+.report-obs-meta td.report-status-closed{background:#2e7d32;color:#fff;font-weight:700;text-align:center}
+.report-obs-case{display:flex;justify-content:space-between;gap:12px;margin:0 0 10px;font-size:12.5px;color:#4a474c}
+.report-obs-photo{margin:0 0 14px;border:1px solid #dcd6cf;background:#f7f7f7;text-align:center;padding:10px}
+.report-obs-photo img{display:block;width:100%;max-width:100%;max-height:520px;height:auto;object-fit:contain;margin:0 auto}
+.report-obs-details{border:1.5px solid #333;padding:12px 14px;background:#fff}
+.report-obs-details h4{margin:0 0 8px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:#111}
+.report-obs-details p{margin:0 0 8px;font-size:13px;line-height:1.45;color:#1d1c1f}
+.report-obs-details p:last-child{margin-bottom:0}
 
 /* ---------- KPI Dashboard ---------- */
 .kpi-dash .v1-grid.g6 .v1-kpi{height:100%;display:flex;flex-direction:column;gap:4px}

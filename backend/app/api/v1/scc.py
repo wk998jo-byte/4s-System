@@ -852,10 +852,26 @@ def sign_report(
                 detail="Signing weekly reports requires the Dept HSE role.",
             )
     elif kind == "monthly":
-        if not user.capabilities.get("sign_monthly_reports") or user.role != "receiver":
+        # Both Dept HSE and Project PM sign monthly packs (separate signature slots).
+        if user.role == "dept_hse":
+            if not (
+                user.capabilities.get("sign_reports")
+                or user.capabilities.get("sign_monthly_reports")
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Signing monthly reports as Dept HSE requires report signing permission.",
+                )
+        elif user.role in {"receiver", "project_pm"}:
+            if not user.capabilities.get("sign_monthly_reports"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Signing monthly reports requires the Project PM role.",
+                )
+        else:
             raise HTTPException(
                 status_code=403,
-                detail="Signing monthly reports requires the Project PM role.",
+                detail="Signing monthly reports requires Dept HSE or Project PM.",
             )
     else:
         raise HTTPException(status_code=400, detail="This report type cannot be signed.")

@@ -1454,22 +1454,29 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
     const allowed = new Set(projectAccess.accessProjects);
     return projects.items.filter((item) => allowed.has(item.label));
   }, [projectAccess.hasAllProjectAccess, projectAccess.accessProjects, projects.items]);
-  const defaultStatus = user?.role === "admin" ? "under_process" : "open";
+  const reviewDefaultStatus = (role?: string | null) => {
+    if (role === "admin") return "under_process";
+    if (role === "operator") return "open";
+    // Dept HSE + Project PM land on All.
+    if (role === "dept_hse" || role === "receiver" || role === "project_pm") return "";
+    return "open";
+  };
+  const defaultStatus = reviewDefaultStatus(user?.role);
   const [status, setStatus] = useState(defaultStatus);
   const [type, setType] = useState("");
   const [scope, setScope] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(caseId ?? "");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<CaseSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [openRecordId, setOpenRecordId] = useState<string | null>(caseId ?? null);
+  const [openRecordId, setOpenRecordId] = useState<string | null>(null);
   const [focusApplied, setFocusApplied] = useState(false);
   const defaultStatusApplied = useRef(false);
 
   useEffect(() => {
     if (!user || defaultStatusApplied.current || caseId) return;
     defaultStatusApplied.current = true;
-    setStatus(user.role === "admin" ? "under_process" : "open");
+    setStatus(reviewDefaultStatus(user.role));
   }, [user, caseId]);
 
   useEffect(() => {
@@ -1508,16 +1515,40 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
 
   useEffect(() => {
     setFocusApplied(false);
-    if (caseId) setOpenRecordId(caseId);
+    if (!caseId) {
+      // Header / URL search was cleared — restore the unfiltered list.
+      setSearch("");
+      setOpenRecordId(null);
+      return;
+    }
+    // Global header search lands here with ?case=<query> (case id fragment, driver, etc.).
+    setSearch(caseId);
+    setStatus("");
+    setType("");
+    setPage(1);
+    setOpenRecordId(null);
   }, [caseId]);
 
   useEffect(() => {
     if (!caseId || focusApplied || rows.length === 0) return;
-    const row = rows.find((item) => item.id === caseId);
-    if (!row) return;
-    setType(row.record_type);
-    setStatus(row.status);
-    setOpenRecordId(caseId);
+    const q = caseId.trim().toLowerCase();
+    const matches = rows.filter((item) => {
+      const id = String(item.id || "").toLowerCase();
+      const cid = String(item.case_id || "").toLowerCase();
+      return id === q || cid === q || cid.includes(q) || id.includes(q);
+    });
+    const exact =
+      matches.find(
+        (item) =>
+          String(item.id) === caseId ||
+          String(item.case_id).toLowerCase() === q,
+      ) || null;
+    const row = exact || (matches.length === 1 ? matches[0] : null);
+    if (row) {
+      setType(row.record_type);
+      setStatus(row.status);
+      setOpenRecordId(row.id);
+    }
     setFocusApplied(true);
   }, [caseId, focusApplied, rows]);
 
@@ -1530,13 +1561,23 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
     }
     const q = search.trim().toLowerCase();
     if (!q) return true;
+    const fields = row.fields || {};
     const haystack = [
+      row.id,
       row.case_id,
       row.title,
       row.project ?? "",
       row.department ?? "",
       TYPE_LABEL[row.record_type] ?? "",
       REVIEW_TYPE[row.record_type] ?? "",
+      String(fields.driver_name ?? ""),
+      String(fields.driver_badge_number ?? ""),
+      String(fields.badge_number ?? ""),
+      String(fields.vehicle_plate ?? ""),
+      String(fields.plate_number ?? ""),
+      String(fields.asset_id ?? ""),
+      String(fields.device_id ?? ""),
+      String(fields.location ?? ""),
     ]
       .join(" ")
       .toLowerCase();
@@ -1578,8 +1619,9 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
   const openRecordType = rows.find((row) => row.id === openRecordId)?.record_type ?? null;
 
   const closeRecord = () => {
+    // Keep ?case= / local search as-is so opening a record and closing it
+    // does not wipe the active filter. User clears search text themselves.
     setOpenRecordId(null);
-    if (caseId) window.location.hash = href({ name: "review" });
   };
 
   const onRecordChanged = () => {
@@ -1732,7 +1774,14 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
             value={search}
             placeholder="Case ID or name"
             aria-label="Search case ID or name"
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              setSearch(next);
+              // Clearing the box is the intentional way to drop a header search.
+              if (!next.trim() && caseId) {
+                window.location.hash = href({ name: "review" });
+              }
+            }}
           />
         </div>
       </div>

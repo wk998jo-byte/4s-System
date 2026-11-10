@@ -3955,6 +3955,171 @@ class PlatformStore:
             return value.strip().lower() not in {"", "0", "false", "no", "off"}
         return bool(value) if value is not None else default
 
+    @staticmethod
+    def _reporter_aliases(user: dict | None) -> set[str]:
+        from app.schemas.auth import format_user_label
+
+        if not user:
+            return set()
+        name = str(user.get("display_name") or "").strip()
+        badge = str(user.get("badge_number") or "").strip()
+        username = str(user.get("username") or "").strip()
+        return {
+            value.lower()
+            for value in (
+                format_user_label(name, badge),
+                name,
+                badge,
+                username,
+            )
+            if value
+        }
+
+    @staticmethod
+    def _case_reported_by(row: dict) -> str:
+        fields = row.get("fields") or {}
+        if not isinstance(fields, dict):
+            return ""
+        return str(
+            fields.get("reported_by")
+            or fields.get("uploaded_by")
+            or fields.get("close_out_submitted_by")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _reporter_matches(reported_by: str, aliases: set[str]) -> bool:
+        raw = (reported_by or "").strip().lower()
+        if not raw or not aliases:
+            return False
+        if raw in aliases:
+            return True
+        return any(alias in raw or raw in alias for alias in aliases if len(alias) >= 2)
+
+    def _report_packets_snapshot(self) -> list[dict]:
+        """Read stored report packets without rebuilding / re-sending compile mail."""
+        with self._sessions() as session:
+            row = session.get(AppStateRow, "report_packets")
+            if row and isinstance(row.value, list):
+                items = [dict(item) for item in row.value if isinstance(item, dict)]
+            else:
+                items = []
+        # Normalize monthly status from signatures so stale Issued / Ready labels
+        # never surface in notifications or other snapshot consumers.
+        for item in items:
+            if item.get("kind") != "monthly":
+                continue
+            if str(item.get("status") or "").lower().startswith("compil"):
+                continue
+            item["issued"] = None
+            item["status"] = self._monthly_signature_status(
+                hse_signed=bool(item.get("signed")),
+                pm_signed=bool(item.get("pm_signed")),
+            )
+        return items
+
+    def _monthly_signature_status(self, *, hse_signed: bool, pm_signed: bool) -> str:
+        if hse_signed and pm_signed:
+            return "Signed"
+        if not hse_signed and not pm_signed:
+            return "Awaiting signatures"
+        if not hse_signed:
+            return "Awaiting HSE signature"
+        return "Awaiting PM signature"
+
+    def _report_ready_notifications(
+        self,
+        *,
+        kinds: set[str] | None = None,
+        projects: list[str] | None = None,
+        for_role: str | None = None,
+    ) -> list[dict]:
+        """In-app notices when compiled report packs are awaiting signature."""
+        allowed_kinds = kinds or {"weekly", "monthly"}
+        allowed_projects = (
+            {str(p) for p in projects if str(p).strip()}
+            if isinstance(projects, list)
+            else None
+        )
+        items: list[dict] = []
+        now = datetime.now(timezone.utc)
+        for packet in self._report_packets_snapshot():
+            kind = str(packet.get("kind") or "")
+            if kind not in allowed_kinds:
+                continue
+            status = str(packet.get("status") or "")
+            if not status.startswith("Awaiting"):
+                continue
+            if kind == "weekly" and packet.get("signed"):
+                continue
+            if kind == "monthly":
+                if packet.get("issued"):
+                    continue
+                # Each role only sees packs still waiting on their own signature.
+                if for_role == "dept_hse" and packet.get("signed"):
+                    continue
+                if for_role in {"receiver", "project_pm"} and packet.get("pm_signed"):
+                    continue
+                if for_role is None and packet.get("signed") and packet.get("pm_signed"):
+                    continue
+            scope = str(packet.get("scope") or "—")
+            if allowed_projects is not None and scope not in allowed_projects:
+                continue
+            generated = packet.get("compile_notified_at") or packet.get("generated_at")
+            age_h = 0.0
+            if generated:
+                try:
+                    generated_at = datetime.fromisoformat(
+                        str(generated).replace("Z", "+00:00")
+                    )
+                    if generated_at.tzinfo is None:
+                        generated_at = generated_at.replace(tzinfo=timezone.utc)
+                    age_h = max(0.0, (now - generated_at).total_seconds() / 3600.0)
+                except ValueError:
+                    age_h = 0.0
+            label = str(packet.get("label") or packet.get("id") or kind.title())
+            kind_label = "Weekly report" if kind == "weekly" else "Monthly report"
+            items.append(
+                {
+                    "id": str(packet.get("id") or f"report-{kind}-{scope}"),
+                    "case_id": str(packet.get("id") or label),
+                    "record_type": "report",
+                    "record_label": kind_label,
+                    "project": scope if kind == "monthly" or scope != "—" else None,
+                    "department": None,
+                    "location": None,
+                    "risk_level": None,
+                    "risk_key": None,
+                    "status": status,
+                    "status_label": status,
+                    "state": "report",
+                    "state_label": "ready to sign",
+                    "detail": f"{scope} · {label} · compiled · awaiting signature",
+                    "age_hours": round(age_h, 1),
+                    "over_hours": 0.0,
+                    "left_hours": 0.0,
+                    "deadline_hours": 0.0,
+                    "href_hint": "reports",
+                }
+            )
+        items.sort(key=lambda item: item["age_hours"], reverse=True)
+        return items
+
+    def _hse_report_ready_notifications(self) -> list[dict]:
+        """Dept HSE: weekly + monthly packs awaiting HSE signature."""
+        return self._report_ready_notifications(
+            kinds={"weekly", "monthly"}, for_role="dept_hse"
+        )
+
+    def _pm_report_ready_notifications(self, user: dict | None = None) -> list[dict]:
+        """Project PM: monthly packs awaiting PM signature only."""
+        projects = (user or {}).get("projects")
+        return self._report_ready_notifications(
+            kinds={"monthly"},
+            projects=projects if isinstance(projects, list) else None,
+            for_role="receiver",
+        )
+
     def save_platform_settings(self, payload: dict) -> dict:
         current = self.get_platform_settings()
         next_value = {**current, **(payload or {})}
@@ -4230,8 +4395,9 @@ class PlatformStore:
         """One monthly packet per project × recent month, even with 0 cases.
 
         After Administration monthlyDay of the following month the packet moves
-        Compiling → Awaiting PM signature. Project PM signature advances it to
-        Ready to issue; Admin Issue marks Issued.
+        Compiling → Awaiting signatures. Dept HSE and Project PM each sign;
+        status tracks who is still needed, then Signed when both have signed.
+        (Issue / Issued is disabled.)
         """
         settings = self.get_platform_settings()
         monthly_day = min(10, max(1, int(settings.get("monthlyDay") or 1)))
@@ -4271,39 +4437,19 @@ class PlatformStore:
                     or by_scope_month.get((name, a[:7]))
                     or {}
                 )
-                issued = prev.get("issued")
+                hse_signed = prev.get("signed")
                 pm_signed = prev.get("pm_signed")
-                # Current / not-yet-due months stay Compiling. Sticky "Issued"
-                # from earlier bad data must not mark November as issued on Nov 8.
+                # Current / not-yet-due months stay Compiling.
                 if not finalized:
                     status = "Compiling"
-                    issued = None
+                    hse_signed = None
                     pm_signed = None
                     generated_at = None
-                elif issued or str(prev.get("status") or "") == "Issued":
-                    status = "Issued"
-                    generated_at = prev.get("generated_at") or datetime(
-                        ready_on.year,
-                        ready_on.month,
-                        ready_on.day,
-                        0,
-                        0,
-                        tzinfo=AST,
-                    ).isoformat()
-                elif pm_signed:
-                    status = "Ready to issue"
-                    generated_at = prev.get("generated_at") or datetime(
-                        ready_on.year,
-                        ready_on.month,
-                        ready_on.day,
-                        0,
-                        0,
-                        tzinfo=AST,
-                    ).isoformat()
                 else:
-                    # Finalized months wait for Project PM signature (do not
-                    # sticky-keep a prior "Ready to issue" without pm_signed).
-                    status = "Awaiting PM signature"
+                    status = self._monthly_signature_status(
+                        hse_signed=bool(hse_signed),
+                        pm_signed=bool(pm_signed),
+                    )
                     generated_at = prev.get("generated_at") or datetime(
                         ready_on.year,
                         ready_on.month,
@@ -4323,9 +4469,9 @@ class PlatformStore:
                     "status": status,
                     "a": a,
                     "b": b,
-                    "signed": prev.get("signed"),
+                    "signed": hse_signed,
                     "pm_signed": pm_signed,
-                    "issued": issued,
+                    "issued": None,
                     "generated_at": generated_at,
                     "compile_notified_at": compile_notified_at,
                     "_prev_status": str(prev.get("status") or ""),
@@ -4522,22 +4668,38 @@ class PlatformStore:
                     self._save_report_packets(packets)
                     return item
                 if kind == "monthly":
-                    if role != "receiver":
-                        raise ValueError("Only Project PM can sign monthly reports.")
+                    if role not in {"dept_hse", "receiver", "project_pm"}:
+                        raise ValueError(
+                            "Only Dept HSE or Project PM can sign monthly reports."
+                        )
                     if str(item.get("status") or "") == "Compiling":
                         raise ValueError(
                             "This monthly report is still compiling and cannot be signed yet."
                         )
-                    if item.get("issued") or str(item.get("status") or "") == "Issued":
-                        raise ValueError("This monthly report is already issued.")
-                    if item.get("pm_signed"):
-                        raise ValueError("This monthly report is already signed by Project PM.")
-                    item["pm_signed"] = {
+                    if str(item.get("status") or "") == "Signed" and item.get("signed") and item.get("pm_signed"):
+                        raise ValueError("This monthly report is already fully signed.")
+                    stamp = {
                         "by": actor,
                         "signature": sig,
                         "at": datetime.now(timezone.utc).isoformat(),
                     }
-                    item["status"] = "Ready to issue"
+                    if role == "dept_hse":
+                        if item.get("signed"):
+                            raise ValueError(
+                                "This monthly report is already signed by Dept HSE."
+                            )
+                        item["signed"] = stamp
+                    else:
+                        if item.get("pm_signed"):
+                            raise ValueError(
+                                "This monthly report is already signed by Project PM."
+                            )
+                        item["pm_signed"] = stamp
+                    item["status"] = self._monthly_signature_status(
+                        hse_signed=bool(item.get("signed")),
+                        pm_signed=bool(item.get("pm_signed")),
+                    )
+                    item["issued"] = None
                     self._save_report_packets(packets)
                     return item
                 raise ValueError("This report type cannot be signed.")
@@ -4626,74 +4788,10 @@ class PlatformStore:
         pdf_bytes: bytes | None = None,
         pdf_filename: str | None = None,
     ) -> dict:
-        from app.services.report_mail import send_report_email
-
-        packets = self._report_packets()
-        for item in packets:
-            if item.get("id") == report_id:
-                if item.get("kind") != "monthly":
-                    raise ValueError("Only monthly reports can be issued to Project PM.")
-                status = str(item.get("status") or "")
-                if status == "Compiling":
-                    raise ValueError(
-                        "This monthly report is still compiling and cannot be issued yet."
-                    )
-                if status == "Awaiting PM signature" or (
-                    not item.get("pm_signed") and status != "Ready to issue" and status != "Issued"
-                ):
-                    raise ValueError(
-                        "Project PM must sign this monthly report before it can be issued."
-                    )
-                if item.get("issued") or status == "Issued":
-                    raise ValueError("This monthly report is already issued.")
-                if status != "Ready to issue" and not item.get("pm_signed"):
-                    raise ValueError(
-                        "This monthly report is not ready to issue yet."
-                    )
-
-                dist = self.resolve_monthly_distribution(str(item.get("scope") or ""))
-                to_name = (recipient or "").strip() or dist["name"]
-                to_email = dist["email"]
-
-                excel = excel_bytes or self._build_monthly_excel_csv(item)
-                pdf = pdf_bytes or self._build_monthly_pdf_report(item)
-                excel_name = excel_filename or f"{report_id}.csv"
-                pdf_name = pdf_filename or f"{report_id}.pdf"
-                pdf_mime = "application/pdf"
-
-                subject = f"SCC Monthly Report · {item.get('scope')} · {item.get('label')}"
-                body = (
-                    f"Please find the monthly SCC report for {item.get('scope')} "
-                    f"({item.get('label')}).\n\n"
-                    f"Report ID: {report_id}\n"
-                    f"Issued by: {actor}\n"
-                    f"Signed by Project PM: {(item.get('pm_signed') or {}).get('by') or '—'}\n\n"
-                    "Attachments: Excel/CSV export and PDF report.\n"
-                )
-                delivery = send_report_email(
-                    to_email=to_email,
-                    to_name=to_name,
-                    subject=subject,
-                    body=body,
-                    attachments=[
-                        (excel_name, excel, "text/csv"),
-                        (pdf_name, pdf, pdf_mime),
-                    ],
-                )
-
-                item["issued"] = {
-                    "by": actor,
-                    "to": to_name,
-                    "email": to_email,
-                    "at": datetime.now(timezone.utc).isoformat(),
-                    "delivery": delivery,
-                }
-                item["status"] = "Issued"
-                self._save_report_packets(packets)
-                result = dict(item)
-                result["delivery"] = delivery
-                return result
-        raise KeyError(report_id)
+        del report_id, actor, recipient, excel_bytes, excel_filename, pdf_bytes, pdf_filename
+        raise ValueError(
+            "Issuing monthly reports is disabled. Reports are complete once Dept HSE and Project PM have both signed."
+        )
 
     def _closeout_deadline_pending(self, row: dict) -> bool:
         """True while the close-out / confirm-driver / SOS close deadline still applies."""
@@ -4807,6 +4905,7 @@ class PlatformStore:
                     "over_hours": round(over_h, 1),
                     "left_hours": round(left_h, 1),
                     "deadline_hours": hours,
+                    "reported_by": self._case_reported_by(row),
                 }
             )
 
@@ -4821,16 +4920,18 @@ class PlatformStore:
         notify_op = self._setting_bool(settings, "notifyOperator", True)
         notify_admin = self._setting_bool(settings, "notifyAdmin", True)
         notify_hse = self._setting_bool(settings, "notifyHSE", True)
-        # Match Administration → Who gets notified copy:
-        # Operator: due soon + overdue (+ escalated, still their open cases)
-        # Admin: overdue (+ escalated)
-        # Dept HSE: escalated only
+        # Admin: overdue + escalated (all records in scope)
+        # Dept HSE: escalated + compiled weekly/monthly report notices
+        # Operator: due soon / overdue / escalated for records THEY registered only
+        # Project PM (receiver): monthly reports awaiting signature only
         if role == "dept_hse":
             items = (
                 [item for item in items if item["state"] == "esc"]
                 if notify_hse
                 else []
             )
+            if notify_hse:
+                items.extend(self._hse_report_ready_notifications())
         elif role == "admin":
             items = (
                 [item for item in items if item["state"] in {"over", "esc"}]
@@ -4838,12 +4939,18 @@ class PlatformStore:
                 else []
             )
         elif role == "operator":
-            items = (
-                [item for item in items if item["state"] in {"soon", "over", "esc"}]
-                if notify_op
-                else []
-            )
-        # Project PM / receiver: project-scoped rows already filtered; show all states.
+            if not notify_op:
+                items = []
+            else:
+                aliases = self._reporter_aliases(user)
+                items = [
+                    item
+                    for item in items
+                    if item["state"] in {"soon", "over", "esc"}
+                    and self._reporter_matches(str(item.get("reported_by") or ""), aliases)
+                ]
+        elif role in {"receiver", "project_pm"}:
+            items = self._pm_report_ready_notifications(user)
 
         items.sort(key=lambda item: item["age_hours"], reverse=True)
         return {
@@ -4852,6 +4959,7 @@ class PlatformStore:
                 "esc": sum(1 for item in items if item["state"] == "esc"),
                 "over": sum(1 for item in items if item["state"] == "over"),
                 "soon": sum(1 for item in items if item["state"] == "soon"),
+                "report": sum(1 for item in items if item["state"] == "report"),
                 "all": len(items),
             },
             "system_counts": system_counts,

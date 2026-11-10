@@ -1029,17 +1029,17 @@ export function AdminScreen() {
                 [
                   "notifyOperator",
                   "Operator who registered the record",
-                  "In-app bell and email when due soon and when overdue",
+                  "In-app bell only for cases that operator opened — due soon, overdue, and escalated",
                 ],
                 [
                   "notifyAdmin",
                   "SCC Admin",
-                  "In-app bell and email when overdue; daily digest of all overdue items",
+                  "In-app bell when overdue or escalated across all records",
                 ],
                 [
                   "notifyHSE",
                   "Department HSE",
-                  "Notification on escalation, and email + in-system on weekly and monthly reports",
+                  "In-app bell on escalation, plus when weekly and monthly reports are compiled",
                 ],
               ] as const
             ).map(([key, title, sub]) => (
@@ -1425,7 +1425,7 @@ export function AdminScreen() {
                 </span>
               </label>
               <label className="fld">
-                Monthly report issued on day
+                Monthly report opens for signature on day
                 <input
                   type="number"
                   min={1}
@@ -1439,7 +1439,7 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  Month becomes Awaiting PM signature on this day of the next month
+                  Month becomes Awaiting signatures on this day of the next month
                 </span>
               </label>
               <button

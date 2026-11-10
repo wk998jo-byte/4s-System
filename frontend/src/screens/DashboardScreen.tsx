@@ -24,7 +24,9 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import {useList,
+import {
+  bannerYear,
+  useList,
   ProjectOnlyViewSeg,
 } from "./shared";
 
@@ -344,12 +346,18 @@ function Spark({
   const reveal = useChartReveal(hostRef, values.join(","));
   const w = 120;
   const h = 30;
+  // Keep dots/stroke inside the viewBox so first/last points are not clipped.
+  const padX = 5;
+  const padY = 5;
   const mx = Math.max(1, ...values);
   const mn = Math.min(0, ...values);
   const span = Math.max(1, mx - mn);
   const points = values.map((v, i) => {
-    const x = values.length <= 1 ? w / 2 : (i / (values.length - 1)) * w;
-    const y = h - ((v - mn) / span) * (h - 4) - 2;
+    const x =
+      values.length <= 1
+        ? w / 2
+        : padX + (i / (values.length - 1)) * (w - padX * 2);
+    const y = padY + (1 - (v - mn) / span) * (h - padY * 2);
     return { x, y, v, i };
   });
   const visibleCount = Math.max(1, Math.ceil(values.length * Math.max(reveal, 0.001)));
@@ -358,7 +366,15 @@ function Spark({
   return (
     <div className="v1-chart-host v1-spark-host" ref={hostRef} onMouseLeave={() => setTip(null)}>
       <svg className="v1-spark" viewBox={`0 0 ${w} ${h}`} width="100%" height={30} aria-hidden>
-        <polyline fill="none" stroke={color} strokeWidth="2" points={pts} pointerEvents="none" />
+        <polyline
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={pts}
+          pointerEvents="none"
+        />
         {shown.map((p) => {
           const wk = weekLabels?.[p.i];
           const title = wk ? `${wk.label}, ${wk.range}` : `Week ${p.i + 1}`;
@@ -367,7 +383,7 @@ function Spark({
               key={p.i}
               cx={p.x}
               cy={p.y}
-              r={4}
+              r={3.5}
               fill={color}
               style={{ cursor: "pointer" }}
               onMouseMove={(e) =>
@@ -2202,7 +2218,7 @@ export function DashboardScreen({
       })
     : "—";
 
-  const year = new Date().getFullYear();
+  const year = bannerYear();
   const periodLabel = range.label;
   const periodCmp = range.cmp ? `Compared with ${range.cmp}` : "Compared month by month";
 

@@ -14,7 +14,10 @@ import {
   useAutoProjectFilter,
   useProjectAccess,
 } from "../lib/useProjectAccess";
-import {formatUserLabel, useList,
+import {
+  bannerYear,
+  formatUserLabel,
+  useList,
   ProjectOnlyViewSeg,
 } from "./shared";
 
@@ -939,7 +942,7 @@ export function PerformanceScreen() {
       .slice(0, 60);
   }, [activity, scoped, range.a, range.b, names]);
 
-  const year = new Date().getFullYear();
+  const year = bannerYear();
 
   if (loading && !cases.length) return <p className="state">Loading operator performance…</p>;
   if (error && !cases.length) return <p className="state error">{error}</p>;
