@@ -31,6 +31,7 @@ import {
   fmtHwDateTime,
   fmtN,
   healthByType,
+  AI_CAMERA_LOCATIONS,
   coerceHwStatusForDevice,
   HW_DEVICE_META,
   HW_PROJECTS,
@@ -38,6 +39,7 @@ import {
   hwStatusesForDevice,
   hwTotalDevices,
   installedTrend,
+  isAiCameraLocation,
   mergeTransfers,
   projectDeviceMatrix,
   statusByProject,
@@ -659,11 +661,39 @@ export function HwScreen() {
     };
   }, [accessProjects, now]);
 
-  useEffect(() => {
-    if (!accessProjects.includes(addForm.project)) {
-      setAddForm((f) => ({ ...f, project: accessProjects[0] || "Jafurah" }));
+  const addProjectOptions = useMemo(() => {
+    if (addForm.device === "AI Camera") {
+      return accessProjects.filter((p) => isAiCameraLocation(p));
     }
-  }, [accessProjects, addForm.project]);
+    return accessProjects;
+  }, [accessProjects, addForm.device]);
+
+  const transferToOptions = useMemo(() => {
+    if (trForm.type === "AI Camera") {
+      return accessProjects.filter((p) => isAiCameraLocation(p));
+    }
+    return accessProjects;
+  }, [accessProjects, trForm.type]);
+
+  useEffect(() => {
+    const options =
+      addForm.device === "AI Camera"
+        ? accessProjects.filter((p) => isAiCameraLocation(p))
+        : accessProjects;
+    if (!options.includes(addForm.project)) {
+      setAddForm((f) => ({ ...f, project: options[0] || "Jafurah" }));
+    }
+  }, [accessProjects, addForm.device, addForm.project]);
+
+  useEffect(() => {
+    if (trForm.type !== "AI Camera") return;
+    if (!isAiCameraLocation(trForm.to)) {
+      setTrForm((f) => ({
+        ...f,
+        to: accessProjects.find((p) => isAiCameraLocation(p)) || AI_CAMERA_LOCATIONS[0],
+      }));
+    }
+  }, [trForm.type, trForm.to, accessProjects]);
 
   const scopedProjects = useMemo(() => {
     if (view === "projects" && projectFilter) {
@@ -881,6 +911,12 @@ export function HwScreen() {
 
   function onAddDevice() {
     if (!addForm.serial.trim()) return;
+    if (addForm.device === "AI Camera" && !isAiCameraLocation(addForm.project)) {
+      setError(
+        "AI cameras can only be added at Jafurah, Yanbu, Ras Tanura, MGS, Salasil, or Dhahran.",
+      );
+      return;
+    }
     const meta = HW_DEVICE_META.find((d) => d.device === addForm.device);
     const row: HwDevice = {
       id: `DEV-${Date.now()}`,
@@ -894,6 +930,7 @@ export function HwScreen() {
     };
     setRegister((rows) => [row, ...rows]);
     setAddOpen(false);
+    setError(null);
     setAddForm((f) => ({ ...f, serial: "" }));
     toast(`Added ${row.device} ${row.serial}`);
   }
@@ -906,6 +943,12 @@ export function HwScreen() {
       .filter(Boolean);
     if (!qty || serials.length !== qty) {
       setError("Serial count must match quantity.");
+      return;
+    }
+    if (trForm.type === "AI Camera" && !isAiCameraLocation(trForm.to)) {
+      setError(
+        "AI cameras can only be transferred to Jafurah, Yanbu, Ras Tanura, MGS, Salasil, or Dhahran.",
+      );
       return;
     }
     const id = `TRF-${String(transfers.length + 8).padStart(4, "0")}`;
@@ -1643,11 +1686,19 @@ export function HwScreen() {
                 value={addForm.device}
                 onChange={(e) => {
                   const device = e.target.value;
-                  setAddForm((f) => ({
-                    ...f,
-                    device,
-                    status: coerceHwStatusForDevice(device, f.status),
-                  }));
+                  setAddForm((f) => {
+                    const nextProject =
+                      device === "AI Camera" && !isAiCameraLocation(f.project)
+                        ? accessProjects.find((p) => isAiCameraLocation(p)) ||
+                          AI_CAMERA_LOCATIONS[0]
+                        : f.project;
+                    return {
+                      ...f,
+                      device,
+                      project: nextProject,
+                      status: coerceHwStatusForDevice(device, f.status),
+                    };
+                  });
                 }}
               >
                 {HW_DEVICE_META.map((d) => (
@@ -1682,10 +1733,13 @@ export function HwScreen() {
                 value={addForm.project}
                 onChange={(e) => setAddForm((f) => ({ ...f, project: e.target.value }))}
               >
-                {accessProjects.map((p) => (
+                {addProjectOptions.map((p) => (
                   <option key={p}>{p}</option>
                 ))}
               </select>
+              {addForm.device === "AI Camera" ? (
+                <small>AI cameras are limited to the six site locations.</small>
+              ) : null}
             </label>
           </div>
         </Modal>
@@ -1735,16 +1789,30 @@ export function HwScreen() {
                 value={trForm.to}
                 onChange={(e) => setTrForm((f) => ({ ...f, to: e.target.value }))}
               >
-                {accessProjects.map((p) => (
+                {transferToOptions.map((p) => (
                   <option key={p}>{p}</option>
                 ))}
               </select>
+              {trForm.type === "AI Camera" ? (
+                <small>AI cameras can only go to the six site locations.</small>
+              ) : null}
             </label>
             <label>
               Device type
               <select
                 value={trForm.type}
-                onChange={(e) => setTrForm((f) => ({ ...f, type: e.target.value }))}
+                onChange={(e) => {
+                  const type = e.target.value;
+                  setTrForm((f) => ({
+                    ...f,
+                    type,
+                    to:
+                      type === "AI Camera" && !isAiCameraLocation(f.to)
+                        ? accessProjects.find((p) => isAiCameraLocation(p)) ||
+                          AI_CAMERA_LOCATIONS[0]
+                        : f.to,
+                  }));
+                }}
               >
                 {HW_DEVICE_META.map((d) => (
                   <option key={d.device}>{d.device}</option>

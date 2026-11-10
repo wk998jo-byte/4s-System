@@ -93,6 +93,20 @@ export const HW_PROJECTS = [
   "Safaniya",
 ] as const;
 
+/** AI cameras are only deployed at these six sites. */
+export const AI_CAMERA_LOCATIONS = [
+  "Jafurah",
+  "Yanbu",
+  "Ras Tanura",
+  "MGS",
+  "Salasil",
+  "Dhahran",
+] as const;
+
+export function isAiCameraLocation(project: string): boolean {
+  return (AI_CAMERA_LOCATIONS as readonly string[]).includes(project);
+}
+
 /** Share of all devices by project (sums ~1). */
 const PROJECT_SHARE: Record<string, number> = {
   Jafurah: 0.422,

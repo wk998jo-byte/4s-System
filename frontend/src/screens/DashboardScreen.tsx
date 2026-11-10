@@ -29,6 +29,7 @@ import {
   useList,
   ProjectOnlyViewSeg,
 } from "./shared";
+import { AI_CAMERA_LOCATIONS } from "../lib/hwData";
 
 /* Dashboard device tiles — values come from SCC Hardware (mapped labels). */
 const DEVICE_TYPES = [
@@ -1530,17 +1531,29 @@ function LocBlock({
   roomy?: boolean;
   heading?: "h3" | "h4";
 }) {
-  const entries = rows
-    .map(([l, v]) => ({ label: l, value: v[index] }))
-    .filter((x) => x.value > 0)
-    .sort((a, b) => b.value - a.value);
+  // AI Camera card: only the six real site locations (preview of production layout).
+  const isAiCamera = index === 0;
+  const entries = isAiCamera
+    ? AI_CAMERA_LOCATIONS.map((site) => {
+        const hit = rows.find(
+          ([label]) => label === site || label === `${site} (dept)`,
+        );
+        return { label: site, value: hit?.[1]?.[index] ?? 0 };
+      }).filter((x) => x.value > 0)
+    : rows
+        .map(([l, v]) => ({ label: l, value: v[index] }))
+        .filter((x) => x.value > 0)
+        .sort((a, b) => b.value - a.value);
   const split = entries.length > 7;
   const mid = Math.ceil(entries.length / 2);
   const left = split ? entries.slice(0, mid) : entries;
   const right = split ? entries.slice(mid) : [];
   const barColor = (k: string) =>
     k === "Total" ? "var(--ink-2)" : index === 4 || index === 5 ? "var(--red)" : "var(--steel)";
-  const scaleMax = Math.max(totals[index] || 0, ...entries.map((e) => e.value), 1);
+  const displayTotal = isAiCamera
+    ? entries.reduce((sum, e) => sum + e.value, 0)
+    : totals[index] || 0;
+  const scaleMax = Math.max(displayTotal, ...entries.map((e) => e.value), 1);
   const Heading = heading;
 
   return (
@@ -1555,7 +1568,7 @@ function LocBlock({
         <>
           <div className="v1-loc-total">
             <span>Total</span>
-            <b>{fmtN(totals[index])}</b>
+            <b>{fmtN(displayTotal)}</b>
           </div>
           <div className={split ? "v1-bars-cols" : undefined}>
             <HBars rows={left} colorFor={barColor} compact={!roomy} maxValue={scaleMax} />
@@ -1585,10 +1598,16 @@ function LocCard({
   /** Overall AI Camera card only — fuller labels, slightly larger type. */
   roomy?: boolean;
 }) {
-  const entries = rows
-    .map(([, v]) => v[index])
-    .filter((value) => value > 0);
-  const split = entries.length > 7;
+  const isAiCamera = index === 0;
+  const entryCount = isAiCamera
+    ? AI_CAMERA_LOCATIONS.filter((site) =>
+        rows.some(
+          ([label, vals]) =>
+            (label === site || label === `${site} (dept)`) && (vals[index] || 0) > 0,
+        ),
+      ).length
+    : rows.map(([, v]) => v[index]).filter((value) => value > 0).length;
+  const split = entryCount > 7;
 
   return (
     <article

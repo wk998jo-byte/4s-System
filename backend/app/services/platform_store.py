@@ -3038,6 +3038,19 @@ class PlatformStore:
             if project not in valid_sites:
                 errors.append(f"Row {row_idx}: unknown project “{project}”.")
                 continue
+            if device == "AI Camera" and project not in {
+                "Jafurah",
+                "Yanbu",
+                "Ras Tanura",
+                "MGS",
+                "Salasil",
+                "Dhahran",
+            }:
+                errors.append(
+                    f"Row {row_idx}: AI cameras can only be at Jafurah, Yanbu, "
+                    f"Ras Tanura, MGS, Salasil, or Dhahran (got “{project}”)."
+                )
+                continue
             parsed.append(
                 {
                     "id": f"DEV-{serial}",
