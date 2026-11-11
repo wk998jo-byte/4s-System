@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+import hashlib
+import secrets
 from secrets import token_urlsafe
 from threading import Lock
 from uuid import uuid4
@@ -34,6 +36,7 @@ from app.services.auth import (
     SEED_USERS,
     capabilities,
     hash_password,
+    validate_password_strength,
     verify_password,
 )
 from app.services.catalog import CONTACT_CATEGORIES, Catalog
@@ -391,15 +394,19 @@ class PlatformStore:
         cleaned = [str(item).strip() for item in value if str(item).strip()]
         return cleaned or None
 
-    def login(self, username: str, password: str) -> dict | None:
+    def login(self, username: str, password: str) -> dict:
         with self._lock, self._sessions() as session:
             row = (
                 session.query(UserRow)
                 .filter(UserRow.username == username.strip().lower())
                 .one_or_none()
             )
-            if not row or not row.is_active or not verify_password(password, row.password_hash):
-                return None
+            if not row:
+                raise ValueError("Username not found.")
+            if not row.is_active:
+                raise ValueError("This account is inactive.")
+            if not verify_password(password, row.password_hash):
+                raise ValueError("Incorrect password.")
             token = token_urlsafe(32)
             session.add(
                 SessionRow(
@@ -418,11 +425,143 @@ class PlatformStore:
                 session.delete(row)
                 session.commit()
 
+    @staticmethod
+    def _hash_recovery_code(code: str) -> str:
+        return hashlib.sha256(code.strip().encode("utf-8")).hexdigest()
+
+    def request_password_recovery(self, username: str, email: str) -> dict:
+        """Email a one-time code when username + email match. Else raise."""
+        from app.services.mailer import send_plain_email
+
+        uname = (username or "").strip().lower()
+        email_in = (email or "").strip().lower()
+        if not uname or not email_in or "@" not in email_in:
+            raise ValueError("Email doesn't match.")
+        with self._lock, self._sessions() as session:
+            row = (
+                session.query(UserRow)
+                .filter(UserRow.username == uname)
+                .one_or_none()
+            )
+            stored_email = (
+                str(getattr(row, "email", None) or "").strip().lower() if row else ""
+            )
+            if (
+                not row
+                or not row.is_active
+                or not stored_email
+                or stored_email != email_in
+            ):
+                raise ValueError("Email doesn't match.")
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+            state = session.get(AppStateRow, "password_recovery")
+            payload = dict(state.value) if state and isinstance(state.value, dict) else {}
+            payload[uname] = {
+                "email": stored_email,
+                "code_hash": self._hash_recovery_code(code),
+                "expires_at": expires.isoformat(),
+                "attempts": 0,
+            }
+            if state:
+                state.value = payload
+                flag_modified(state, "value")
+            else:
+                session.add(AppStateRow(key="password_recovery", value=payload))
+            session.commit()
+            display = row.display_name
+        delivery = send_plain_email(
+            to_email=stored_email,
+            to_name=display,
+            subject="SCC Platform password recovery code",
+            body=(
+                f"Hello {display},\n\n"
+                f"Your password recovery code is: {code}\n\n"
+                "It expires in 15 minutes. If you did not request this, ignore this email.\n"
+            ),
+        )
+        return {
+            "ok": True,
+            "message": "If the email matches, a recovery code has been sent.",
+            "delivery": delivery.get("mode"),
+        }
+
+    def reset_password_with_recovery_code(
+        self, username: str, email: str, code: str, new_password: str
+    ) -> dict:
+        validate_password_strength(new_password)
+        uname = (username or "").strip().lower()
+        email_in = (email or "").strip().lower()
+        code_in = (code or "").strip()
+        if not uname or not email_in or not code_in:
+            raise ValueError("Enter username, email, and recovery code.")
+        with self._lock, self._sessions() as session:
+            row = (
+                session.query(UserRow)
+                .filter(UserRow.username == uname)
+                .one_or_none()
+            )
+            stored_email = (
+                str(getattr(row, "email", None) or "").strip().lower() if row else ""
+            )
+            if (
+                not row
+                or not row.is_active
+                or not stored_email
+                or stored_email != email_in
+            ):
+                raise ValueError("Email doesn't match.")
+            state = session.get(AppStateRow, "password_recovery")
+            payload = dict(state.value) if state and isinstance(state.value, dict) else {}
+            entry = payload.get(uname)
+            if not isinstance(entry, dict):
+                raise ValueError("No recovery code found. Request a new code.")
+            attempts = int(entry.get("attempts") or 0)
+            if attempts >= 5:
+                payload.pop(uname, None)
+                if state:
+                    state.value = payload
+                    flag_modified(state, "value")
+                    session.commit()
+                raise ValueError("Too many invalid code attempts. Request a new code.")
+            expires_raw = str(entry.get("expires_at") or "")
+            try:
+                expires_at = datetime.fromisoformat(expires_raw)
+            except ValueError:
+                expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                payload.pop(uname, None)
+                if state:
+                    state.value = payload
+                    flag_modified(state, "value")
+                    session.commit()
+                raise ValueError("Recovery code expired. Request a new code.")
+            expected = str(entry.get("code_hash") or "")
+            if not secrets.compare_digest(
+                expected, self._hash_recovery_code(code_in)
+            ):
+                entry["attempts"] = attempts + 1
+                payload[uname] = entry
+                if state:
+                    state.value = payload
+                    flag_modified(state, "value")
+                    session.commit()
+                raise ValueError("Invalid recovery code.")
+            row.password_hash = hash_password(new_password)
+            row.must_change_password = False
+            payload.pop(uname, None)
+            if state:
+                state.value = payload
+                flag_modified(state, "value")
+            session.commit()
+            session.refresh(row)
+            return self._user_out(row)
+
     def change_password(
         self, user_id: str, current_password: str, new_password: str
     ) -> dict:
-        from app.services.auth import validate_password_strength
-
         validate_password_strength(new_password)
         if current_password == new_password:
             raise ValueError("New password must be different from the current password.")

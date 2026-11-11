@@ -6,6 +6,8 @@ from app.schemas.auth import (
     ConfirmDelete,
     LoginRequest,
     LoginResponse,
+    PasswordRecoveryRequest,
+    PasswordRecoveryReset,
     UserCreate,
     UserOut,
     UserUpdate,
@@ -20,10 +22,45 @@ router = APIRouter(tags=["Auth"])
 
 @router.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest) -> LoginResponse:
-    result = platform_store.login(payload.username, payload.password)
-    if not result:
-        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    try:
+        result = platform_store.login(payload.username, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     return LoginResponse(**result)
+
+
+@router.post("/auth/password-recovery/request")
+def password_recovery_request(payload: PasswordRecoveryRequest) -> dict:
+    try:
+        return platform_store.request_password_recovery(
+            payload.username, payload.email
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/auth/password-recovery/reset")
+def password_recovery_reset(payload: PasswordRecoveryReset) -> dict:
+    try:
+        user = platform_store.reset_password_with_recovery_code(
+            payload.username,
+            payload.email,
+            payload.code,
+            payload.new_password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    platform_store.record_audit(
+        actor_user_id=user["id"],
+        actor_name=format_user_label(
+            user.get("display_name"), user.get("badge_number")
+        ),
+        action="password_recovered",
+        category="users",
+        summary="Reset password via email recovery code",
+        details={"username": user.get("username")},
+    )
+    return {"ok": True, "message": "Password updated. You can sign in now."}
 
 
 @router.post("/auth/change-password", response_model=UserOut)

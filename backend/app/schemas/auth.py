@@ -44,6 +44,18 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=1, max_length=200)
 
 
+class PasswordRecoveryRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=80)
+    email: str = Field(..., min_length=1, max_length=200)
+
+
+class PasswordRecoveryReset(BaseModel):
+    username: str = Field(..., min_length=1, max_length=80)
+    email: str = Field(..., min_length=1, max_length=200)
+    code: str = Field(..., min_length=4, max_length=12)
+    new_password: str = Field(..., min_length=1, max_length=200)
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=80)
     password: str = Field(..., min_length=1, max_length=200)

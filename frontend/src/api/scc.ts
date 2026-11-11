@@ -547,6 +547,26 @@ export const fetchUsers = () =>
     }>;
   }>("/api/v1/admin/users");
 
+export const requestPasswordRecovery = (body: {
+  username: string;
+  email: string;
+}) =>
+  request<{ ok: boolean; message: string; delivery?: string }>(
+    "/api/v1/auth/password-recovery/request",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+export const resetPasswordWithCode = (body: {
+  username: string;
+  email: string;
+  code: string;
+  new_password: string;
+}) =>
+  request<{ ok: boolean; message: string }>(
+    "/api/v1/auth/password-recovery/reset",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
 export const createUser = (body: {
   username: string;
   password: string;

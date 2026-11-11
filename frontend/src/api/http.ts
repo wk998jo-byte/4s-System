@@ -25,7 +25,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       "Cannot reach the API. Confirm the backend is running.",
     );
   }
-  if (response.status === 401 && !path.includes("/auth/login")) {
+  if (
+    response.status === 401 &&
+    !path.includes("/auth/login") &&
+    !path.includes("/auth/password-recovery")
+  ) {
     window.dispatchEvent(new Event("scc-unauthorized"));
   }
   if (!response.ok) {
