@@ -1326,8 +1326,13 @@ function AiCameraNewDrawer({
                       }));
                     }}
                     required
+                    disabled={isPositiveAlert}
                     hideNotes
-                    hint="Managed by Admin"
+                    hint={
+                      isPositiveAlert
+                        ? "Locked to Positive Observation while Alert type is Positive"
+                        : "Managed by Admin"
+                    }
                   />
                 </div>
                 {isOtherCategory ? (
