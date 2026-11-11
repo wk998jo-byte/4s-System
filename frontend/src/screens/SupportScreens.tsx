@@ -30,7 +30,6 @@ import {
   fetchUsers,
   fetchPlatformSettings,
   notifyCasesChanged,
-  openNotificationsPanel,
   savePlatformSettings,
   putJson,
   rejectCase,
@@ -1474,6 +1473,7 @@ export function ReviewScreen({
   const defaultStatus = statusFromRoute ?? reviewDefaultStatus(user?.role);
   const [status, setStatus] = useState(defaultStatus);
   const [type, setType] = useState(typesFilterValue(typesFromRoute));
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [scope, setScope] = useState("");
   const [search, setSearch] = useState(caseId ?? "");
   const [page, setPage] = useState(1);
@@ -1496,6 +1496,7 @@ export function ReviewScreen({
     appliedRouteKey.current = routeKey;
     setStatus(statusFromRoute ?? reviewDefaultStatus(user?.role));
     setType(typesKey);
+    setOverdueOnly(false);
   }, [user, caseId, statusFromRoute, typesFromRoute]);
 
   useEffect(() => {
@@ -1544,6 +1545,7 @@ export function ReviewScreen({
     setSearch(caseId);
     setStatus("");
     setType("");
+    setOverdueOnly(false);
     setPage(1);
     setOpenRecordId(null);
   }, [caseId]);
@@ -1576,6 +1578,7 @@ export function ReviewScreen({
       const allowed = new Set(type.split(",").filter(Boolean));
       if (!allowed.has(row.record_type)) return false;
     }
+    if (overdueOnly && !isReviewOverdue(row)) return false;
     if (scope.startsWith("project:")) {
       if (row.project !== scope.slice("project:".length)) return false;
     } else if (scope.startsWith("department:")) {
@@ -1636,7 +1639,7 @@ export function ReviewScreen({
 
   useEffect(() => {
     setPage(1);
-  }, [status, type, scope, search]);
+  }, [status, type, overdueOnly, scope, search]);
 
   const openRecordType = rows.find((row) => row.id === openRecordId)?.record_type ?? null;
 
@@ -1652,8 +1655,28 @@ export function ReviewScreen({
   };
 
   const applyKpi = (nextType: string) => {
+    const alreadyOn = !overdueOnly && type === nextType && status === "under_process";
+    if (alreadyOn) {
+      setType("");
+      setStatus(reviewDefaultStatus(user?.role));
+      setOverdueOnly(false);
+      return;
+    }
+    setOverdueOnly(false);
     setType(nextType);
     setStatus("under_process");
+  };
+
+  const applyOverdueKpi = () => {
+    if (overdueOnly) {
+      setOverdueOnly(false);
+      setType("");
+      setStatus(reviewDefaultStatus(user?.role));
+      return;
+    }
+    setOverdueOnly(true);
+    setType("");
+    setStatus("");
   };
 
   return (
@@ -1716,8 +1739,8 @@ export function ReviewScreen({
         </button>
         <button
           type="button"
-          className="v1-kpi click"
-          onClick={() => openNotificationsPanel("over")}
+          className={`v1-kpi click${overdueOnly ? " sel" : ""}`}
+          onClick={applyOverdueKpi}
         >
           <div className="t">
             <span className="ic" style={{ color: "var(--red)" }}>
