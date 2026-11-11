@@ -6,7 +6,12 @@ export type Route =
   | { name: "list"; type: ModuleType; caseId?: string }
   | { name: "new"; type: ModuleType }
   | { name: "detail"; id: string }
-  | { name: "review"; caseId?: string }
+  | {
+      name: "review";
+      caseId?: string;
+      status?: "open" | "under_process" | "closed";
+      types?: ModuleType[];
+    }
   | { name: "reports"; reportId?: string; sign?: boolean }
   | { name: "kpi" }
   | { name: "weather" }
@@ -57,7 +62,29 @@ export function parseHash(hash?: string): Route {
   if (a === "cases" && b) return { name: "detail", id: b };
   if (a === "review") {
     const caseId = params.get("case") || undefined;
-    return caseId ? { name: "review", caseId } : { name: "review" };
+    const rawStatus = params.get("status") || undefined;
+    const status =
+      rawStatus === "open" ||
+      rawStatus === "under_process" ||
+      rawStatus === "closed"
+        ? rawStatus
+        : undefined;
+    const types = (params.get("types") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value): value is ModuleType =>
+        value === "ai_camera" ||
+        value === "dashcam" ||
+        value === "speed" ||
+        value === "sos" ||
+        value === "itqan",
+      );
+    return {
+      name: "review",
+      ...(caseId ? { caseId } : {}),
+      ...(status ? { status } : {}),
+      ...(types.length ? { types } : {}),
+    };
   }
   if (a === "reports") {
     const reportId = params.get("report") || undefined;
@@ -87,7 +114,12 @@ export function href(route: Route): string {
   if (route.name === "new") return `#/${MODULE_HREF[route.type]}/new`;
   if (route.name === "detail") return `#/cases/${route.id}`;
   if (route.name === "review") {
-    return route.caseId ? `#/review?case=${encodeURIComponent(route.caseId)}` : "#/review";
+    const params = new URLSearchParams();
+    if (route.caseId) params.set("case", route.caseId);
+    if (route.status) params.set("status", route.status);
+    if (route.types?.length) params.set("types", route.types.join(","));
+    const query = params.toString();
+    return query ? `#/review?${query}` : "#/review";
   }
   if (route.name === "hw") return "#/scc-hw";
   if (route.name === "performance") return "#/operators";

@@ -1654,22 +1654,26 @@ function NeedsAttention({
             n: openConfirm,
             text: "Dashcam and Speed violations wait for Confirm Driver & Submit",
             action: "View",
-            href: href({ name: "review" }),
+            href: href({
+              name: "review",
+              status: "open",
+              types: ["dashcam", "speed"],
+            }),
           },
           {
             ic: "clock",
             n: underReview,
             text: "records wait for Admin review",
             action: "Review",
-            href: href({ name: "review" }),
+            href: href({ name: "review", status: "under_process" }),
           },
           {
             ic: "watch",
             n: sosOpen,
             text: "SOS alerts are still open",
             action: "Open",
-            href: href({ name: "list", type: "sos" }),
-          },
+            href: href({ name: "review", status: "open", types: ["sos"] }),
+          }
         ].map((a) => (
           <div className="v1-att" key={a.text}>
             <span className="ic">

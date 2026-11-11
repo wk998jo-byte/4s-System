@@ -139,7 +139,15 @@ function Screen({
     return <NewRecordScreen type={route.type} />;
   }
   if (route.name === "detail") return <CaseDetailScreen id={route.id} />;
-  if (route.name === "review") return <ReviewScreen caseId={route.caseId} />;
+  if (route.name === "review") {
+    return (
+      <ReviewScreen
+        caseId={route.caseId}
+        status={route.status}
+        types={route.types}
+      />
+    );
+  }
   if (route.name === "reports") {
     return (
       <ReportsScreen reportId={route.reportId} openSign={Boolean(route.sign)} />

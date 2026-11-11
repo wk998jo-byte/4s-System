@@ -1440,7 +1440,15 @@ function ReviewCloseOut({
   );
 }
 
-export function ReviewScreen({ caseId }: { caseId?: string }) {
+export function ReviewScreen({
+  caseId,
+  status: statusFromRoute,
+  types: typesFromRoute,
+}: {
+  caseId?: string;
+  status?: "open" | "under_process" | "closed";
+  types?: Array<"ai_camera" | "dashcam" | "speed" | "sos" | "itqan">;
+}) {
   const { user } = useAuth();
   const projects = useList("project");
   const departments = useList("department");
@@ -1461,9 +1469,11 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
     if (role === "dept_hse" || role === "receiver" || role === "project_pm") return "";
     return "open";
   };
-  const defaultStatus = reviewDefaultStatus(user?.role);
+  const typesFilterValue = (types?: string[] | null) =>
+    types?.length ? types.join(",") : "";
+  const defaultStatus = statusFromRoute ?? reviewDefaultStatus(user?.role);
   const [status, setStatus] = useState(defaultStatus);
-  const [type, setType] = useState("");
+  const [type, setType] = useState(typesFilterValue(typesFromRoute));
   const [scope, setScope] = useState("");
   const [search, setSearch] = useState(caseId ?? "");
   const [page, setPage] = useState(1);
@@ -1471,13 +1481,22 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [openRecordId, setOpenRecordId] = useState<string | null>(null);
   const [focusApplied, setFocusApplied] = useState(false);
-  const defaultStatusApplied = useRef(false);
+  const appliedRouteKey = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!user || defaultStatusApplied.current || caseId) return;
-    defaultStatusApplied.current = true;
-    setStatus(reviewDefaultStatus(user.role));
-  }, [user, caseId]);
+    // Deep-link ?case= owns the status once a matching row is focused.
+    if (caseId) return;
+    const typesKey = typesFilterValue(typesFromRoute);
+    const routeKey = statusFromRoute || typesKey
+      ? `status:${statusFromRoute ?? ""}|types:${typesKey}`
+      : user
+        ? `role:${user.role}`
+        : null;
+    if (!routeKey || appliedRouteKey.current === routeKey) return;
+    appliedRouteKey.current = routeKey;
+    setStatus(statusFromRoute ?? reviewDefaultStatus(user?.role));
+    setType(typesKey);
+  }, [user, caseId, statusFromRoute, typesFromRoute]);
 
   useEffect(() => {
     if (!projectAccess.isProjectScoped) return;
@@ -1553,7 +1572,10 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
   }, [caseId, focusApplied, rows]);
 
   const filteredBase = rows.filter((row) => {
-    if (type && row.record_type !== type) return false;
+    if (type) {
+      const allowed = new Set(type.split(",").filter(Boolean));
+      if (!allowed.has(row.record_type)) return false;
+    }
     if (scope.startsWith("project:")) {
       if (row.project !== scope.slice("project:".length)) return false;
     } else if (scope.startsWith("department:")) {
@@ -1738,6 +1760,7 @@ export function ReviewScreen({ caseId }: { caseId?: string }) {
             onChange={(event) => setType(event.target.value)}
           >
             <option value="">All types</option>
+            <option value="dashcam,speed">Dashcam &amp; Speed</option>
             <option value="ai_camera">AI Camera Observation</option>
             <option value="dashcam">DashCam Observation</option>
             <option value="speed">Speed Violation</option>

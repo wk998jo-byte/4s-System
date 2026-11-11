@@ -17,4 +17,27 @@ describe("hash routing", () => {
       "#/dashcam?case=abc",
     );
   });
+
+  it("parses review status deep-links from Needs attention", () => {
+    expect(parseHash("#/review?status=open")).toEqual({
+      name: "review",
+      status: "open",
+    });
+    expect(parseHash("#/review?status=under_process")).toEqual({
+      name: "review",
+      status: "under_process",
+    });
+    expect(parseHash("#/review?status=open&types=dashcam,speed")).toEqual({
+      name: "review",
+      status: "open",
+      types: ["dashcam", "speed"],
+    });
+    expect(href({ name: "review", status: "open" })).toBe("#/review?status=open");
+    expect(href({ name: "review", status: "under_process" })).toBe(
+      "#/review?status=under_process",
+    );
+    expect(
+      href({ name: "review", status: "open", types: ["dashcam", "speed"] }),
+    ).toBe("#/review?status=open&types=dashcam%2Cspeed");
+  });
 });
