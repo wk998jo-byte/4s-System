@@ -372,6 +372,7 @@ export interface HwRegisterItem {
   status: string;
   project: string;
   lastSignal?: string | null;
+  registeredIso?: string;
   updatedIso?: string;
 }
 
@@ -386,6 +387,23 @@ export interface HwRegisterImportResult {
 
 export const fetchHwRegister = () =>
   request<{ items: HwRegisterItem[]; total: number }>("/api/v1/hw/register");
+
+export const createHwRegisterItem = (payload: {
+  device: string;
+  serial: string;
+  status: string;
+  project: string;
+  system?: string;
+}) =>
+  request<{
+    item: HwRegisterItem;
+    items: HwRegisterItem[];
+    total: number;
+    hw: HwPayload;
+  }>("/api/v1/hw/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export async function downloadHwRegisterTemplate() {
   const { getToken } = await import("../auth/session");

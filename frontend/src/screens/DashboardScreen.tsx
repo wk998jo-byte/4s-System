@@ -10,11 +10,13 @@ import {
 import {
   fetchCases,
   fetchHw,
+  fetchHwRegister,
   fetchOverview,
   fetchOverdueNotifications,
   type CaseSummary,
   type DashboardOverview,
   type HwPayload,
+  type HwRegisterItem,
 } from "../api/scc";
 import { errorMessage } from "../lib/errors";
 import { href, type DashTab } from "../lib/routing";
@@ -408,16 +410,24 @@ function Spark({
 
 function deviceRowsFromCounts(
   counts: Record<string, Record<string, number>> | null | undefined,
+  opts?: { kind?: "project" | "department" },
 ): Array<[string, number[]]> {
   if (!counts) return [];
+  const kind = opts?.kind ?? "project";
   return Object.entries(counts)
     .map(([site, byType]) => {
-      const vals = DEVICE_TYPES.map((dashType) =>
-        Object.entries(byType).reduce((sum, [hwType, n]) => {
+      const vals = DEVICE_TYPES.map((dashType) => {
+        if (
+          dashType === "AI Camera" &&
+          (kind === "department" || !AI_CAMERA_LOCATIONS.includes(site as (typeof AI_CAMERA_LOCATIONS)[number]))
+        ) {
+          return 0;
+        }
+        return Object.entries(byType).reduce((sum, [hwType, n]) => {
           if (HW_TO_DASH[hwType] === dashType) return sum + (Number(n) || 0);
           return sum;
-        }, 0),
-      );
+        }, 0);
+      });
       return [site, vals] as [string, number[]];
     })
     .sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0));
@@ -425,6 +435,36 @@ function deviceRowsFromCounts(
 
 function deviceTotals(rows: Array<[string, number[]]>) {
   return DEVICE_TYPES.map((_, i) => rows.reduce((a, [, v]) => a + (v[i] || 0), 0));
+}
+
+function hwItemRegisteredAt(item: HwRegisterItem): number | null {
+  const raw = item.registeredIso || item.updatedIso;
+  if (!raw) return null;
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+/** Current project inventory, minus devices registered after the period end. */
+function projectCountsAsOf(
+  counts: Record<string, Record<string, number>> | null | undefined,
+  register: HwRegisterItem[],
+  asOfMs: number,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [site, byType] of Object.entries(counts || {})) {
+    out[site] = { ...byType };
+  }
+  for (const item of register) {
+    const registeredAt = hwItemRegisteredAt(item);
+    // Only dated registrations can be rolled back; undated stock stays in every period.
+    if (registeredAt == null || registeredAt <= asOfMs) continue;
+    const site = item.project;
+    const device = item.device;
+    if (!site || !device) continue;
+    if (!out[site]) out[site] = {};
+    out[site][device] = Math.max(0, Number(out[site][device] || 0) - 1);
+  }
+  return out;
 }
 
 function Icon({ name, size = 16 }: { name: string; size?: number }) {
@@ -1720,6 +1760,7 @@ export function DashboardScreen({
   const [department, setDepartment] = useState("");
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [hw, setHw] = useState<HwPayload | null>(null);
+  const [hwRegister, setHwRegister] = useState<HwRegisterItem[]>([]);
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [overdue, setOverdue] = useState<{
     items: Array<Record<string, unknown>>;
@@ -1748,7 +1789,7 @@ export function DashboardScreen({
       return;
     }
     try {
-      const [ov, caseData, od, hwData] = await Promise.all([
+      const [ov, caseData, od, hwData, hwReg] = await Promise.all([
         fetchOverview({
           period: "custom",
           view: view === "overall" ? "overall" : view,
@@ -1763,11 +1804,13 @@ export function DashboardScreen({
           counts: { all: 0, esc: 0, over: 0, soon: 0 },
         })),
         fetchHw(),
+        fetchHwRegister().catch(() => ({ items: [] as HwRegisterItem[], total: 0 })),
       ]);
       setOverview(ov);
       setCases(caseData.items);
       setOverdue(od);
       setHw(hwData);
+      setHwRegister(hwReg.items || []);
       setError(null);
     } catch (err) {
       setError(errorMessage(err));
@@ -1806,37 +1849,60 @@ export function DashboardScreen({
     [departmentList.items, overview?.departments],
   );
 
+  const periodProjectCounts = useMemo(
+    () => projectCountsAsOf(hw?.project_counts, hwRegister, range.b),
+    [hw?.project_counts, hwRegister, range.b],
+  );
+
+  const zerosDeviceRow = () => DEVICE_TYPES.map(() => 0);
+
+  /** Project inventory rows (access-scoped when By Project). */
+  const projectRows = useMemo(() => {
+    const all = deviceRowsFromCounts(periodProjectCounts, { kind: "project" });
+    if (view === "projects" && project) {
+      return all.filter(([site]) => site === project);
+    }
+    if (view === "projects" || projectAccess.isProjectScoped) {
+      const allowed = new Set(projectAccess.accessProjects);
+      return all.filter(([site]) => allowed.has(site));
+    }
+    // Over All: include every project site present in HW inventory.
+    const known = new Set(all.map(([site]) => site));
+    const extras = projectAccess.accessProjects
+      .filter((label) => !known.has(label))
+      .map((label): [string, number[]] => [label, zerosDeviceRow()]);
+    return [...all, ...extras];
+  }, [
+    periodProjectCounts,
+    projectAccess.accessProjects,
+    projectAccess.isProjectScoped,
+    project,
+    view,
+  ]);
+
+  const departmentRows = useMemo(() => {
+    const all = deviceRowsFromCounts(hw?.department_counts, { kind: "department" });
+    if (department) {
+      return all.filter(([site]) => site === department);
+    }
+    const labels = Array.from(
+      new Set([
+        ...catalogDepartments,
+        ...all.map(([site]) => site),
+      ]),
+    );
+    const bySite = new Map(all);
+    return labels
+      .map((label): [string, number[]] => [label, bySite.get(label) ?? zerosDeviceRow()])
+      .sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0));
+  }, [hw?.department_counts, department, catalogDepartments]);
+
+  // Over All = every project + every department (same basis as HW Dashboard Summary).
   const rows = useMemo(() => {
-    const zeros = () => DEVICE_TYPES.map(() => 0);
-    if (view === "departments") {
-      const all = deviceRowsFromCounts(hw?.department_counts);
-      const allowed = new Set(
-        department
-          ? [department]
-          : catalogDepartments.length
-            ? catalogDepartments
-            : all.map(([site]) => site),
-      );
-      // Keep admin-list order when possible; drop sites outside the list.
-      const filtered = all.filter(([site]) => allowed.has(site));
-      if (!department && catalogDepartments.length) {
-        const bySite = new Map(filtered);
-        return catalogDepartments
-          .map((label): [string, number[]] => [label, bySite.get(label) ?? zeros()])
-          .sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0));
-      }
-      return filtered;
-    }
-    const projectRows = deviceRowsFromCounts(hw?.project_counts);
-    if (view === "projects") {
-      const allowed = new Set(
-        project ? [project] : projectAccess.accessProjects,
-      );
-      return projectRows.filter(([site]) => allowed.has(site));
-    }
-    // Over All: every HW site plus every admin-list department.
+    if (view === "departments") return departmentRows;
+    if (view === "projects") return projectRows;
     const projectNames = new Set(projectRows.map(([site]) => site));
-    const deptRows = deviceRowsFromCounts(hw?.department_counts).map(
+    const deptRows = departmentRows.map(
       ([site, vals]): [string, number[]] => [
         projectNames.has(site) ? `${site} (dept)` : site,
         vals,
@@ -1846,18 +1912,12 @@ export function DashboardScreen({
     const missingDepts = catalogDepartments
       .map((label) => (projectNames.has(label) ? `${label} (dept)` : label))
       .filter((label) => !knownDept.has(label))
-      .map((label): [string, number[]] => [label, zeros()]);
+      .map((label): [string, number[]] => [label, zerosDeviceRow()]);
     return [...projectRows, ...deptRows, ...missingDepts].sort(
       (a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0),
     );
-  }, [
-    hw,
-    view,
-    project,
-    department,
-    projectAccess.accessProjects,
-    catalogDepartments,
-  ]);
+  }, [view, projectRows, departmentRows, catalogDepartments]);
+
   const totals = useMemo(() => deviceTotals(rows), [rows]);
   const deptSiteLabels = useMemo(() => {
     const labels = new Set<string>();
@@ -1950,18 +2010,6 @@ export function DashboardScreen({
       .filter((s) => device === "All" || s.device === device || (device === "Smartwatch" && s.device === "Smart Helmet"))
       .filter((s) => s.data.some((x) => x > 0) || device !== "All");
   }, [countType, device]);
-
-  const recordCounts = useMemo(() => {
-    const by = (pred: (r: CaseSummary) => boolean) => periodCases.filter(pred).length;
-    return {
-      "AI Camera": by((r) => r.record_type === "ai_camera"),
-      GPS: by((r) => r.record_type === "speed"),
-      Dashcam: by((r) => r.record_type === "dashcam"),
-      "Smart Helmet": by((r) => r.record_type === "sos"),
-      Smartwatch: by((r) => r.record_type === "sos"),
-      "Weather Station": 0,
-    } as Record<string, number>;
-  }, [periodCases]);
 
   const chartCases = useMemo(
     () => scopedCases.filter((r) => r.record_type !== "itqan"),
@@ -2402,7 +2450,7 @@ export function DashboardScreen({
           <div className="v1-grid g6">
             {DEVICE_TYPES.map((d, i) => {
               const selected = device === d;
-              const n = recordCounts[d] ?? 0;
+              const n = totals[i] || 0;
               return (
                 <button
                   type="button"
@@ -2416,11 +2464,11 @@ export function DashboardScreen({
                     </span>
                     {d}
                   </div>
-                  <div className="v">{fmtN(d === "Weather Station" ? totals[i] : n)}</div>
+                  <div className="v">{fmtN(n)}</div>
                   <div className="s">
                     {d === "Weather Station"
-                      ? `devices deployed · ${fmtN(totals[i])} logging hourly`
-                      : `${fmtN(totals[i])} devices deployed · records in this period`}
+                      ? "devices deployed · logging hourly"
+                      : "devices deployed"}
                   </div>
                 </button>
               );

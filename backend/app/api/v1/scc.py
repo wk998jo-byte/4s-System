@@ -16,6 +16,7 @@ from app.schemas.scc import (
     ContactCreate,
     ContactUpdate,
     DashcamCreate,
+    HwRegisterCreate,
     HwUpdate,
     ItqanCreate,
     ItqanStatusUpdate,
@@ -803,6 +804,31 @@ def put_hw(payload: HwUpdate, user: UserOut = Depends(require_admin)):
 def get_hw_register(user: UserOut = Depends(get_current_user)):
     del user
     return platform_store.get_hw_register()
+
+
+@router.post("/hw/register")
+def create_hw_register_item(
+    payload: HwRegisterCreate,
+    user: UserOut = Depends(get_current_user),
+):
+    try:
+        result = platform_store.add_hw_register_item(payload)
+    except ValueError as exc:
+        _http_value_error(exc)
+    platform_store.record_audit(
+        actor_user_id=user.id,
+        actor_name=actor_label(user),
+        action="hw_register_added",
+        category="hw",
+        summary=f"Added {payload.device} {payload.serial} to Device Register",
+        details={
+            "device": payload.device,
+            "serial": payload.serial,
+            "project": payload.project,
+            "status": payload.status,
+        },
+    )
+    return result
 
 
 @router.get("/hw/register/template")

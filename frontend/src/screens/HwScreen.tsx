@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import {
+  createHwRegisterItem,
   downloadHwRegisterTemplate,
   fetchHw,
   fetchHwRegister,
@@ -21,7 +22,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
 import { DashboardScreen } from "./DashboardScreen";
-import { formatUserLabel, ProjectOnlyViewSeg } from "./shared";
+import { formatUserLabel, ProjectOnlyViewSeg, useList } from "./shared";
 import { useChartReveal } from "../lib/useChartReveal";
 import {
   buildDeviceRegister,
@@ -158,6 +159,7 @@ function asHwDevices(items: HwRegisterItem[], fallbackNow: Date): HwDevice[] {
   return items.map((item, index) => {
     const meta = HW_DEVICE_META.find((d) => d.device === item.device);
     const device = (item.device as HwDeviceType) || "AI Camera";
+    const fallbackIso = fallbackNow.toISOString();
     return {
       id: item.id || `DEV-${item.serial || index}`,
       device,
@@ -166,7 +168,8 @@ function asHwDevices(items: HwRegisterItem[], fallbackNow: Date): HwDevice[] {
       status: coerceHwStatusForDevice(device, item.status || "In Stock"),
       project: item.project,
       lastSignal: item.lastSignal ?? null,
-      updatedIso: item.updatedIso || fallbackNow.toISOString(),
+      registeredIso: item.registeredIso || item.updatedIso || fallbackIso,
+      updatedIso: item.updatedIso || fallbackIso,
     };
   });
 }
@@ -695,6 +698,12 @@ export function HwScreen() {
     }
   }, [trForm.type, trForm.to, accessProjects]);
 
+  const departmentList = useList("department");
+  const catalogDepartments = useMemo(
+    () => departmentList.items.map((item) => item.label),
+    [departmentList.items],
+  );
+
   const scopedProjects = useMemo(() => {
     if (view === "projects" && projectFilter) {
       return accessProjects.filter((p) => p === projectFilter);
@@ -702,35 +711,115 @@ export function HwScreen() {
     return accessProjects;
   }, [accessProjects, view, projectFilter]);
 
+  /** Every project site present in inventory (plus access list), ordered. */
+  const allProjectSites = useMemo(() => {
+    const fromDb = Object.keys(hw?.project_counts || {});
+    const ordered = [
+      ...scopedProjects,
+      ...fromDb.filter((site) => !scopedProjects.includes(site)),
+    ];
+    return ordered;
+  }, [hw?.project_counts, scopedProjects]);
+
+  /** Summary / type banners: every project site + every department. */
+  const summarySites = useMemo(() => {
+    const depts = Array.from(
+      new Set([
+        ...catalogDepartments,
+        ...Object.keys(hw?.department_counts || {}),
+      ]),
+    );
+    if (view === "projects") {
+      return allProjectSites.map((p) => ({
+        key: p,
+        label: p,
+        kind: "project" as const,
+      }));
+    }
+    if (view === "departments") {
+      return depts.map((d) => ({
+        key: `dept:${d}`,
+        label: d,
+        kind: "department" as const,
+      }));
+    }
+    return [
+      ...allProjectSites.map((p) => ({
+        key: p,
+        label: p,
+        kind: "project" as const,
+      })),
+      ...depts.map((d) => ({
+        key: `dept:${d}`,
+        label: d,
+        kind: "department" as const,
+      })),
+    ];
+  }, [view, allProjectSites, catalogDepartments, hw?.department_counts]);
+
   const matrix = useMemo(() => {
-    const fromDb = hw?.project_counts || {};
+    const fromProjects = hw?.project_counts || {};
+    const fromDepts = hw?.department_counts || {};
     const out: Record<string, Record<string, number>> = {};
-    for (const project of scopedProjects) {
-      const site = fromDb[project] || {};
-      out[project] = {};
+    const fill = (
+      key: string,
+      label: string,
+      kind: "project" | "department",
+      source: Record<string, number> | undefined,
+    ) => {
+      out[key] = {};
       for (const meta of HW_DEVICE_META) {
-        out[project][meta.device] = Number(site[meta.device] || 0);
+        let n = Number(source?.[meta.device] || 0);
+        // AI cameras exist only on the six project sites — never departments / other sites.
+        if (
+          meta.device === "AI Camera" &&
+          (kind === "department" || !isAiCameraLocation(label))
+        ) {
+          n = 0;
+        }
+        out[key][meta.device] = n;
+      }
+    };
+    for (const site of summarySites) {
+      if (site.kind === "project") {
+        fill(site.key, site.label, "project", fromProjects[site.label]);
+      } else {
+        fill(site.key, site.label, "department", fromDepts[site.label]);
       }
     }
-    // Fallback to V1 seed matrix only when DB has no inventory yet.
-    const dbTotal = Object.values(fromDb).reduce(
-      (sum, site) => sum + Object.values(site).reduce((a, n) => a + (Number(n) || 0), 0),
-      0,
-    );
+    const dbTotal =
+      Object.values(fromProjects).reduce(
+        (sum, site) => sum + Object.values(site).reduce((a, n) => a + (Number(n) || 0), 0),
+        0,
+      ) +
+      Object.values(fromDepts).reduce(
+        (sum, site) => sum + Object.values(site).reduce((a, n) => a + (Number(n) || 0), 0),
+        0,
+      );
     if (dbTotal > 0) return out;
-    return projectDeviceMatrix(scopedProjects);
-  }, [hw, scopedProjects]);
+    // Fallback seed: projects only when DB is empty.
+    const seeded = projectDeviceMatrix(scopedProjects);
+    for (const project of scopedProjects) {
+      out[project] = {};
+      for (const meta of HW_DEVICE_META) {
+        let n = Number(seeded[project]?.[meta.device] || 0);
+        if (meta.device === "AI Camera" && !isAiCameraLocation(project)) n = 0;
+        out[project][meta.device] = n;
+      }
+    }
+    return out;
+  }, [hw, summarySites, scopedProjects]);
 
   const typeTotals = useMemo(() => {
     const out: Record<string, number> = {};
     for (const meta of HW_DEVICE_META) {
-      out[meta.device] = scopedProjects.reduce(
-        (s, p) => s + (matrix[p]?.[meta.device] || 0),
+      out[meta.device] = summarySites.reduce(
+        (s, site) => s + (matrix[site.key]?.[meta.device] || 0),
         0,
       );
     }
     return out;
-  }, [matrix, scopedProjects]);
+  }, [matrix, summarySites]);
 
   const byStatus = useMemo(() => statusByProject(scopedProjects), [scopedProjects]);
   const health = useMemo(() => healthByType(scopedProjects), [scopedProjects]);
@@ -844,11 +933,17 @@ export function HwScreen() {
   }
 
   function exportSummaryCsv() {
-    const header = ["Project / Location", ...HW_DEVICE_META.map((d) => d.device), "Total"];
-    const body = scopedProjects.map((project) => {
-      const counts = HW_DEVICE_META.map((d) => matrix[project]?.[d.device] || 0);
+    const header = [
+      "Project / Department",
+      ...HW_DEVICE_META.map((d) => d.device),
+      "Total",
+    ];
+    const body = summarySites.map((site) => {
+      const counts = HW_DEVICE_META.map((d) => matrix[site.key]?.[d.device] || 0);
       const total = counts.reduce((s, n) => s + n, 0);
-      return [project, ...counts, total];
+      const label =
+        site.kind === "department" ? `${site.label} (department)` : site.label;
+      return [label, ...counts, total];
     });
     const footer = [
       "Total",
@@ -909,7 +1004,7 @@ export function HwScreen() {
     toast("Exported change history");
   }
 
-  function onAddDevice() {
+  async function onAddDevice() {
     if (!addForm.serial.trim()) return;
     if (addForm.device === "AI Camera" && !isAiCameraLocation(addForm.project)) {
       setError(
@@ -918,21 +1013,23 @@ export function HwScreen() {
       return;
     }
     const meta = HW_DEVICE_META.find((d) => d.device === addForm.device);
-    const row: HwDevice = {
-      id: `DEV-${Date.now()}`,
-      device: addForm.device as HwDevice["device"],
-      system: meta?.system || "4S",
-      serial: addForm.serial.trim(),
-      status: coerceHwStatusForDevice(addForm.device, addForm.status),
-      project: addForm.project,
-      lastSignal: null,
-      updatedIso: now.toISOString(),
-    };
-    setRegister((rows) => [row, ...rows]);
-    setAddOpen(false);
-    setError(null);
-    setAddForm((f) => ({ ...f, serial: "" }));
-    toast(`Added ${row.device} ${row.serial}`);
+    try {
+      const result = await createHwRegisterItem({
+        device: addForm.device,
+        serial: addForm.serial.trim(),
+        status: coerceHwStatusForDevice(addForm.device, addForm.status),
+        project: addForm.project,
+        system: meta?.system || "4S",
+      });
+      setHw(result.hw);
+      setRegister(asHwDevices(result.items, now));
+      setAddOpen(false);
+      setError(null);
+      setAddForm((f) => ({ ...f, serial: "" }));
+      toast(`Added ${addForm.device} ${addForm.serial.trim()}`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   function onSendTransfer() {
@@ -1344,8 +1441,8 @@ export function HwScreen() {
               <div>
                 <h3>Dashboard summary</h3>
                 <p className="sub">
-                  Devices per project and location, grouped by system. Counts come from the Device
-                  Register. Select a number to open those devices.
+                  Devices per project and department, grouped by system. Includes every project
+                  site and every department.
                 </p>
               </div>
               <HwExcelBtns
@@ -1361,7 +1458,7 @@ export function HwScreen() {
               <table className="v1-tbl hw-heat-tbl">
                 <thead>
                   <tr className="hw-heat-groups">
-                    <th rowSpan={2}>Project / Location</th>
+                    <th rowSpan={2}>Project / Department</th>
                     <th colSpan={7} className="sys-4s">
                       4S
                     </th>
@@ -1387,18 +1484,21 @@ export function HwScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {scopedProjects.map((project) => {
+                  {summarySites.map((site) => {
                     const rowTotal = HW_DEVICE_META.reduce(
-                      (s, d) => s + (matrix[project]?.[d.device] || 0),
+                      (s, d) => s + (matrix[site.key]?.[d.device] || 0),
                       0,
                     );
                     return (
-                      <tr key={project}>
+                      <tr key={site.key}>
                         <td>
-                          <b>{project}</b>
+                          <b>{site.label}</b>
+                          {site.kind === "department" ? (
+                            <small className="muted"> dept</small>
+                          ) : null}
                         </td>
                         {HW_DEVICE_META.map((d) => {
-                          const n = matrix[project]?.[d.device] || 0;
+                          const n = matrix[site.key]?.[d.device] || 0;
                           const heat = n <= 0 ? 0 : Math.min(1, 0.18 + n / Math.max(d.total * 0.55, 1));
                           return (
                             <td key={d.device} className="n mono">

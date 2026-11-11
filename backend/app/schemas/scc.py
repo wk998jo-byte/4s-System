@@ -248,6 +248,14 @@ class HwUpdate(BaseModel):
     department_counts: dict[str, dict[str, int]]
 
 
+class HwRegisterCreate(BaseModel):
+    device: str = Field(..., min_length=1, max_length=80)
+    serial: str = Field(..., min_length=1, max_length=120)
+    status: str = Field(..., min_length=1, max_length=80)
+    project: str = Field(..., min_length=1, max_length=120)
+    system: str | None = Field(default=None, max_length=40)
+
+
 class CaseAdminUpdate(BaseModel):
     """Admin edit of original record fields (partial)."""
 

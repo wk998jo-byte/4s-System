@@ -307,6 +307,7 @@ class PlatformStore:
         self._migrate_itqan_status_finished()
         self._seed_hw_inventory_v1()
         self._seed_hw_department_v1()
+        self._migrate_ai_camera_locations_v1()
         self._seed_asset_classifications()
         self._seed_users()
         self._ensure_sla_deadlines()
@@ -1274,7 +1275,28 @@ class PlatformStore:
         matrix: dict[str, dict[str, int]] = {
             site: {dtype: 0 for dtype, _ in device_totals} for site in sites
         }
+        ai_camera_sites = [
+            "Jafurah",
+            "Yanbu",
+            "Ras Tanura",
+            "MGS",
+            "Salasil",
+            "Dhahran",
+        ]
         for dtype, total in device_totals:
+            if dtype == "AI Camera":
+                # AI cameras only exist at the six allowed project sites.
+                targets = [site for site in ai_camera_sites if site in matrix] or ai_camera_sites
+                share_sum = sum(project_share.get(site, 0) for site in targets) or 1
+                used = 0
+                for i, site in enumerate(targets):
+                    if i == len(targets) - 1:
+                        n = max(0, total - used)
+                    else:
+                        n = max(0, round(total * (project_share.get(site, 0) / share_sum)))
+                        used += n
+                    matrix[site][dtype] = n
+                continue
             used = 0
             for i, site in enumerate(sites):
                 share = project_share.get(site, 1 / max(len(sites), 1))
@@ -1328,8 +1350,8 @@ class PlatformStore:
         departments = [item["label"] for item in self.catalog.get("department")]
         if not departments:
             return
-        # Department inventory is GPS + Dashcam heavy (historic AVL / dashcam deploy).
-        device_totals = [("GPS", 1980), ("Dashcam", 668), ("AI Camera", 12)]
+        # Department inventory is GPS + Dashcam only — AI cameras stay on project sites.
+        device_totals = [("GPS", 1980), ("Dashcam", 668)]
         matrix = self._empty_hw_dept()
         for dtype, total in device_totals:
             used = 0
@@ -3139,6 +3161,97 @@ class PlatformStore:
             "updated_at": None,
         }
 
+    def _ai_camera_sites(self) -> list[str]:
+        return [
+            "Jafurah",
+            "Yanbu",
+            "Ras Tanura",
+            "MGS",
+            "Salasil",
+            "Dhahran",
+        ]
+
+    def _redistribute_ai_cameras(
+        self,
+        project: dict[str, dict[str, int]],
+        dept: dict[str, dict[str, int]],
+    ) -> bool:
+        """Keep AI Camera counts only on the six allowed project sites; never on departments."""
+        allowed = self._ai_camera_sites()
+        allowed_set = set(allowed)
+        share = {
+            "Jafurah": 0.422,
+            "Yanbu": 0.187,
+            "Dhahran": 0.09,
+            "MGS": 0.075,
+            "Salasil": 0.055,
+            "Ras Tanura": 0.05,
+        }
+        total = 0
+        dirty = False
+        for site, counts in project.items():
+            n = int(counts.get("AI Camera", 0) or 0)
+            total += n
+            if site not in allowed_set and n:
+                dirty = True
+        for counts in dept.values():
+            n = int(counts.get("AI Camera", 0) or 0)
+            total += n
+            if n:
+                dirty = True
+            if int(counts.get("AI Camera", 0) or 0) != 0:
+                counts["AI Camera"] = 0
+                dirty = True
+        if not dirty:
+            return False
+
+        for counts in project.values():
+            counts["AI Camera"] = 0
+        for counts in dept.values():
+            counts["AI Camera"] = 0
+
+        targets = [site for site in allowed if site in project] or list(allowed)
+        for site in targets:
+            project.setdefault(site, {})
+            if "AI Camera" not in project[site]:
+                # Ensure key exists for sites created only for redistribution.
+                project[site] = dict(project[site])
+        share_sum = sum(share.get(site, 0) for site in targets) or 1
+        used = 0
+        for i, site in enumerate(targets):
+            if i == len(targets) - 1:
+                n = max(0, total - used)
+            else:
+                n = max(0, round(total * (share.get(site, 0) / share_sum)))
+                used += n
+            project[site]["AI Camera"] = n
+        return True
+
+    def _migrate_ai_camera_locations_v1(self) -> None:
+        """One-time + idempotent: AI cameras only at six project sites, never departments."""
+        state = self._align_hw(self._hw_state())
+        project = {
+            site: dict(counts) for site, counts in state["project"].items()
+        }
+        dept = {
+            name: dict(counts) for name, counts in state["department"].items()
+        }
+        if not self._redistribute_ai_cameras(project, dept):
+            return
+        with self._lock, self._sessions() as session:
+            row = session.get(AppStateRow, "hw")
+            value = {
+                "project": project,
+                "department": dept,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if row:
+                row.value = value
+                flag_modified(row, "value")
+            else:
+                session.add(AppStateRow(key="hw", value=value))
+            session.commit()
+
     def _align_hw(self, state: dict) -> dict:
         project = self._empty_hw_project()
         dept = self._empty_hw_dept()
@@ -3153,6 +3266,16 @@ class PlatformStore:
                 )
             for dtype in counts:
                 counts[dtype] = int(previous.get(dtype, 0) or 0)
+        # Keep any extra sites that exist in saved data (still normalize AI cameras after).
+        for site, previous in saved_project.items():
+            if site in project:
+                continue
+            project[site] = {
+                dtype: int((previous or {}).get(dtype, 0) or 0)
+                for dtype in next(iter(project.values()), {"AI Camera": 0})
+            }
+            if "AI Camera" not in project[site]:
+                project[site]["AI Camera"] = int((previous or {}).get("AI Camera", 0) or 0)
         legacy_dept = {"avl": "GPS", "dashcam": "Dashcam"}
         type_aliases = {label.lower(): label for label in next(iter(dept.values()), {})}
         type_aliases.update({old.lower(): new for old, new in legacy_dept.items()})
@@ -3168,6 +3291,7 @@ class PlatformStore:
                     normalized[new_key] = int(previous.get(old_key, 0) or 0)
             for key in counts:
                 counts[key] = int(normalized.get(key, 0) or 0)
+        self._redistribute_ai_cameras(project, dept)
         return {
             "project": project,
             "department": dept,
@@ -3175,10 +3299,16 @@ class PlatformStore:
         }
 
     def get_hw(self) -> dict:
-        state = self._align_hw(self._hw_state())
+        raw = self._hw_state()
+        dirty = self._ai_camera_inventory_dirty(raw)
+        state = self._align_hw(raw)
         project = {site: dict(counts) for site, counts in state["project"].items()}
         dept = {name: dict(counts) for name, counts in state["department"].items()}
-        updated = state.get("updated_at")
+        if dirty:
+            self._persist_hw_state(project, dept)
+            updated = datetime.now(timezone.utc).isoformat()
+        else:
+            updated = state.get("updated_at")
         totals = {}
         grand = 0
         for site, counts in project.items():
@@ -3192,6 +3322,35 @@ class PlatformStore:
             "all_projects": grand,
             "department_counts": dept,
         }
+
+    def _ai_camera_inventory_dirty(self, raw: dict) -> bool:
+        allowed = set(self._ai_camera_sites())
+        for site, counts in (raw.get("project") or {}).items():
+            if int((counts or {}).get("AI Camera", 0) or 0) and site not in allowed:
+                return True
+        for counts in (raw.get("department") or {}).values():
+            if int((counts or {}).get("AI Camera", 0) or 0):
+                return True
+        return False
+
+    def _persist_hw_state(
+        self,
+        project: dict[str, dict[str, int]],
+        dept: dict[str, dict[str, int]],
+    ) -> None:
+        value = {
+            "project": project,
+            "department": dept,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with self._lock, self._sessions() as session:
+            row = session.get(AppStateRow, "hw")
+            if row:
+                row.value = value
+                flag_modified(row, "value")
+            else:
+                session.add(AppStateRow(key="hw", value=value))
+            session.commit()
 
     def save_hw(self, payload) -> dict:
         with self._lock, self._sessions() as session:
@@ -3210,6 +3369,7 @@ class PlatformStore:
             for name, counts in payload.department_counts.items():
                 if name in dept:
                     dept[name].update(counts)
+            self._redistribute_ai_cameras(project, dept)
             value = {
                 "project": project,
                 "department": dept,
@@ -3263,6 +3423,89 @@ class PlatformStore:
             else:
                 session.add(AppStateRow(key="hw_register", value=value))
             session.commit()
+
+    def add_hw_register_item(self, payload) -> dict:
+        """Append one Device Register row and bump project inventory."""
+        device = str(getattr(payload, "device", "") or "").strip()
+        serial = str(getattr(payload, "serial", "") or "").strip()
+        status = str(getattr(payload, "status", "") or "").strip()
+        project = str(getattr(payload, "project", "") or "").strip()
+        system = str(getattr(payload, "system", "") or "").strip()
+        if not device or not serial or not status or not project:
+            raise ValueError("Device, serial, status, and project are required.")
+        aliases = self._hw_device_aliases()
+        device = aliases.get(device.lower(), device)
+        status = self._hw_coerce_status_for_device(
+            device, self._hw_status_aliases().get(status.lower(), status)
+        )
+        if status == "Assigned" and not self._hw_is_wearable(device):
+            raise ValueError(
+                "Status “Assigned” is only allowed for Smart Helmet and Smart Watch."
+            )
+        if device == "AI Camera" and project not in {
+            "Jafurah",
+            "Yanbu",
+            "Ras Tanura",
+            "MGS",
+            "Salasil",
+            "Dhahran",
+        }:
+            raise ValueError(
+                "AI cameras can only be at Jafurah, Yanbu, Ras Tanura, MGS, Salasil, or Dhahran."
+            )
+        existing = self.get_hw_register()["items"]
+        for item in existing:
+            if str(item.get("serial") or "").strip().lower() == serial.lower():
+                raise ValueError(f"Serial “{serial}” is already in the register.")
+        if not system:
+            catalog = {
+                str(item.get("label") or "").strip(): str(item.get("notes") or "4S")
+                for item in self.catalog.get("scc_device_type")
+            }
+            system = catalog.get(device, "4S")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        row = {
+            "id": f"DEV-{serial}",
+            "device": device,
+            "system": system,
+            "serial": serial,
+            "status": status,
+            "project": project,
+            "lastSignal": None,
+            "registeredIso": now_iso,
+            "updatedIso": now_iso,
+        }
+        items = [*existing, row]
+        items.sort(key=lambda item: str(item.get("serial") or ""))
+        self._save_hw_register_items(items)
+
+        state = self._align_hw(self._hw_state())
+        project_counts = {
+            site: dict(counts) for site, counts in state["project"].items()
+        }
+        self._adjust_hw_project_count(project_counts, project, device, 1)
+        dept_counts = {
+            name: dict(counts) for name, counts in state["department"].items()
+        }
+        self._redistribute_ai_cameras(project_counts, dept_counts)
+        with self._lock, self._sessions() as session:
+            hw_row = session.get(AppStateRow, "hw")
+            value = {
+                "project": project_counts,
+                "department": dept_counts,
+                "updated_at": now_iso,
+            }
+            if hw_row:
+                hw_row.value = value
+            else:
+                session.add(AppStateRow(key="hw", value=value))
+            session.commit()
+        return {
+            "item": row,
+            "items": items,
+            "total": len(items),
+            "hw": self.get_hw(),
+        }
 
     def _hw_device_aliases(self) -> dict[str, str]:
         aliases = {
@@ -3439,6 +3682,7 @@ class PlatformStore:
                     f"Ras Tanura, MGS, Salasil, or Dhahran (got “{project}”)."
                 )
                 continue
+            now_iso = datetime.now(timezone.utc).isoformat()
             parsed.append(
                 {
                     "id": f"DEV-{serial}",
@@ -3448,7 +3692,8 @@ class PlatformStore:
                     "status": status,
                     "project": project,
                     "lastSignal": None,
-                    "updatedIso": datetime.now(timezone.utc).isoformat(),
+                    "registeredIso": now_iso,
+                    "updatedIso": now_iso,
                 }
             )
 
@@ -3486,7 +3731,18 @@ class PlatformStore:
                 self._adjust_hw_project_count(
                     project_counts, item["project"], item["device"], 1
                 )
-            merged = {**prev, **item, "id": prev.get("id") or item["id"]}
+            # Keep the original registration timestamp for period as-of counts.
+            registered = (
+                prev.get("registeredIso")
+                or prev.get("updatedIso")
+                or item.get("registeredIso")
+            )
+            merged = {
+                **prev,
+                **item,
+                "id": prev.get("id") or item["id"],
+                "registeredIso": registered,
+            }
             by_serial[key] = merged
             updated += 1
 

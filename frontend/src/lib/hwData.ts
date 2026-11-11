@@ -31,6 +31,7 @@ export type HwDevice = {
   status: HwStatus;
   project: string;
   lastSignal: string | null;
+  registeredIso?: string;
   updatedIso: string;
 };
 
@@ -249,14 +250,39 @@ export function projectDeviceMatrix(projects: string[]) {
   for (const project of projects) {
     matrix[project] = {} as Record<HwDeviceType, number>;
     for (const meta of HW_DEVICE_META) {
+      if (meta.device === "AI Camera" && !isAiCameraLocation(project)) {
+        matrix[project][meta.device] = 0;
+        continue;
+      }
       const share = PROJECT_SHARE[project] ?? 1 / Math.max(projects.length, 1);
       matrix[project][meta.device] = Math.max(0, Math.round(meta.total * share));
+    }
+  }
+  // AI cameras: force the full total onto the six allowed sites only.
+  const aiSites = projects.filter((p) => isAiCameraLocation(p));
+  if (aiSites.length) {
+    const aiTotal =
+      HW_DEVICE_META.find((m) => m.device === "AI Camera")?.total || 0;
+    const shareSum = aiSites.reduce((s, p) => s + (PROJECT_SHARE[p] || 0), 0) || 1;
+    let used = 0;
+    aiSites.forEach((site, i) => {
+      if (i === aiSites.length - 1) {
+        matrix[site]["AI Camera"] = Math.max(0, aiTotal - used);
+      } else {
+        const n = Math.max(0, Math.round(aiTotal * ((PROJECT_SHARE[site] || 0) / shareSum)));
+        used += n;
+        matrix[site]["AI Camera"] = n;
+      }
+    });
+    for (const project of projects) {
+      if (!isAiCameraLocation(project)) matrix[project]["AI Camera"] = 0;
     }
   }
   // Adjust last project so column totals match meta totals.
   const last = projects[projects.length - 1];
   if (last) {
     for (const meta of HW_DEVICE_META) {
+      if (meta.device === "AI Camera") continue;
       const sum = projects
         .slice(0, -1)
         .reduce((s, p) => s + (matrix[p][meta.device] || 0), 0);
