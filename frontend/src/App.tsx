@@ -86,7 +86,7 @@ export default function App() {
   }
 
   if (loading) return <p className="state login-loading">Checking session…</p>;
-  if (!user) return <LoginScreen />;
+  if (!user || user.must_change_password) return <LoginScreen />;
 
   const { title, subtitle } = titles(route);
   const caps = user.capabilities;

@@ -552,6 +552,7 @@ export const createUser = (body: {
   password: string;
   display_name: string;
   badge_number: string;
+  email?: string | null;
   role: string;
   projects?: string[] | null;
 }) => request("/api/v1/admin/users", { method: "POST", body: JSON.stringify(body) });
@@ -562,6 +563,7 @@ export const updateUser = (
     username: string;
     display_name: string;
     badge_number: string;
+    email?: string | null;
     role: string;
     password?: string | null;
     projects?: string[] | null;
@@ -572,8 +574,10 @@ export const updateUser = (
     username: string;
     display_name: string;
     badge_number: string | null;
+    email?: string | null;
     role: string;
     projects?: string[] | null;
+    must_change_password?: boolean;
   }>(`/api/v1/admin/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(body),

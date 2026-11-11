@@ -370,14 +370,19 @@ class PlatformStore:
             projects = [str(p) for p in projects]
         else:
             projects = None
+        email = getattr(row, "email", None)
         return {
             "id": row.id,
             "username": row.username,
             "display_name": row.display_name,
             "badge_number": row.badge_number,
+            "email": (str(email).strip() if email else None) or None,
             "role": row.role,
             "capabilities": capabilities(row.role),
             "projects": projects,
+            "must_change_password": bool(
+                getattr(row, "must_change_password", False)
+            ),
         }
 
     def _normalize_projects(self, value) -> list[str] | None:
@@ -413,6 +418,26 @@ class PlatformStore:
                 session.delete(row)
                 session.commit()
 
+    def change_password(
+        self, user_id: str, current_password: str, new_password: str
+    ) -> dict:
+        from app.services.auth import validate_password_strength
+
+        validate_password_strength(new_password)
+        if current_password == new_password:
+            raise ValueError("New password must be different from the current password.")
+        with self._lock, self._sessions() as session:
+            row = session.get(UserRow, user_id)
+            if not row or not row.is_active:
+                raise KeyError(user_id)
+            if not verify_password(current_password, row.password_hash):
+                raise ValueError("Current password is incorrect.")
+            row.password_hash = hash_password(new_password)
+            row.must_change_password = False
+            session.commit()
+            session.refresh(row)
+            return self._user_out(row)
+
     def user_from_token(self, token: str) -> dict | None:
         with self._sessions() as session:
             session_row = session.get(SessionRow, token)
@@ -436,6 +461,8 @@ class PlatformStore:
             )
         username = payload.username.strip().lower()
         projects = self._normalize_projects(getattr(payload, "projects", None))
+        email_raw = getattr(payload, "email", None)
+        email = (str(email_raw).strip() if email_raw is not None else "") or None
         with self._lock, self._sessions() as session:
             exists = (
                 session.query(UserRow).filter(UserRow.username == username).one_or_none()
@@ -447,8 +474,10 @@ class PlatformStore:
                 username=username,
                 display_name=payload.display_name.strip(),
                 badge_number=payload.badge_number.strip(),
+                email=email,
                 role=role,
                 password_hash=hash_password(payload.password),
+                must_change_password=True,
                 is_active=True,
                 projects=projects,
             )
@@ -469,6 +498,8 @@ class PlatformStore:
         badge = payload.badge_number.strip()
         new_password = (payload.password or "").strip()
         projects = self._normalize_projects(getattr(payload, "projects", None))
+        email_raw = getattr(payload, "email", None)
+        email = (str(email_raw).strip() if email_raw is not None else "") or None
         with self._lock, self._sessions() as session:
             row = session.get(UserRow, user_id)
             if not row:
@@ -498,10 +529,13 @@ class PlatformStore:
             row.username = username
             row.display_name = display_name
             row.badge_number = badge
+            row.email = email
             row.role = role
             row.projects = projects
             if new_password:
                 row.password_hash = hash_password(new_password)
+                # Admin-set temp password for someone else → force change next login.
+                row.must_change_password = actor_id != user_id
             session.commit()
             session.refresh(row)
             updated = self._user_out(row)

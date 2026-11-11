@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.api.deps import get_current_user, require_admin
 from app.schemas.auth import (
+    ChangePasswordRequest,
     ConfirmDelete,
     LoginRequest,
     LoginResponse,
@@ -23,6 +24,32 @@ def login(payload: LoginRequest) -> LoginResponse:
     if not result:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
     return LoginResponse(**result)
+
+
+@router.post("/auth/change-password", response_model=UserOut)
+def change_password(
+    payload: ChangePasswordRequest,
+    user: UserOut = Depends(get_current_user),
+) -> UserOut:
+    try:
+        updated = platform_store.change_password(
+            user.id,
+            payload.current_password,
+            payload.new_password,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="User not found.") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    platform_store.record_audit(
+        actor_user_id=user.id,
+        actor_name=actor_label(user),
+        action="password_changed",
+        category="users",
+        summary="Changed sign-in password",
+        details={"forced": bool(user.must_change_password)},
+    )
+    return UserOut(**updated)
 
 
 @router.post("/auth/logout")

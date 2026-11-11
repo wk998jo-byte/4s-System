@@ -293,6 +293,7 @@ export function AdminScreen() {
     password: "",
     display_name: "",
     badge_number: "",
+    email: "",
     role: "operator",
   });
 
@@ -664,13 +665,17 @@ export function AdminScreen() {
   async function onAddUser(event: FormEvent) {
     event.preventDefault();
     try {
-      await createUser(newUser);
+      await createUser({
+        ...newUser,
+        email: newUser.email.trim() || null,
+      });
       setShowAddUser(false);
       setNewUser({
         username: "",
         password: "",
         display_name: "",
         badge_number: "",
+        email: "",
         role: "operator",
       });
       await loadUsers();
@@ -1676,6 +1681,17 @@ export function AdminScreen() {
                   value={newUser.password}
                   onChange={(event) =>
                     setNewUser({ ...newUser, password: event.target.value })
+                  }
+                />
+              </label>
+              <label className="fld">
+                Email
+                <input
+                  type="email"
+                  value={newUser.email}
+                  placeholder="For password recovery later"
+                  onChange={(event) =>
+                    setNewUser({ ...newUser, email: event.target.value })
                   }
                 />
               </label>

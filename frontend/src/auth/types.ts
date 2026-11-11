@@ -5,9 +5,11 @@ export interface AuthUser {
   username: string;
   display_name: string;
   badge_number?: string | null;
+  email?: string | null;
   role: UserRole;
   capabilities: Record<string, boolean>;
   projects?: string[] | null;
+  must_change_password?: boolean;
 }
 
 export const ROLE_LABEL: Record<string, string> = {

@@ -46,6 +46,15 @@ def _migrate_sqlite(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN badge_number VARCHAR(80)"))
         if user_names and "projects" not in user_names:
             conn.execute(text("ALTER TABLE users ADD COLUMN projects JSON"))
+        if user_names and "email" not in user_names:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(200)"))
+        if user_names and "must_change_password" not in user_names:
+            conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN must_change_password "
+                    "BOOLEAN DEFAULT 0 NOT NULL"
+                )
+            )
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

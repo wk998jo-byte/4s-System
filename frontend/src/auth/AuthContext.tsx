@@ -13,7 +13,8 @@ import type { AuthUser } from "./types";
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<AuthUser>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
 }
 
@@ -60,8 +61,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           { method: "POST", body: JSON.stringify({ username, password }) },
         );
         saveSession(result.access_token, result.user);
-        window.location.hash = "#/dashboard";
         setUser(result.user);
+        if (!result.user.must_change_password) {
+          window.location.hash = "#/dashboard";
+        }
+        return result.user;
+      },
+      changePassword: async (currentPassword, newPassword) => {
+        const updated = await request<AuthUser>("/api/v1/auth/change-password", {
+          method: "POST",
+          body: JSON.stringify({
+            current_password: currentPassword,
+            new_password: newPassword,
+          }),
+        });
+        const token = getToken();
+        if (token) saveSession(token, updated);
+        setUser(updated);
+        window.location.hash = "#/dashboard";
+        return updated;
       },
       logout: async () => {
         try {

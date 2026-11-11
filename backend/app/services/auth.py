@@ -162,6 +162,17 @@ def verify_password(password: str, stored: str) -> bool:
     return secrets.compare_digest(check, digest)
 
 
+def validate_password_strength(password: str) -> None:
+    """User-chosen passwords: 10+ chars, 1 capital, 1 number."""
+    value = password or ""
+    if len(value) < 10:
+        raise ValueError("Password must be at least 10 characters.")
+    if not any(ch.isupper() for ch in value):
+        raise ValueError("Password must include at least one capital letter.")
+    if not any(ch.isdigit() for ch in value):
+        raise ValueError("Password must include at least one number.")
+
+
 def capabilities(role: str) -> dict[str, bool]:
     admin = role == "admin"
     operatorish = role in {"admin", "operator"}

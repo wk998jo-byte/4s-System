@@ -26,9 +26,11 @@ class UserOut(BaseModel):
     username: str
     display_name: str
     badge_number: str | None = None
+    email: str | None = None
     role: str
     capabilities: dict[str, bool]
     projects: list[str] | None = None
+    must_change_password: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -37,11 +39,17 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=200)
+    new_password: str = Field(..., min_length=1, max_length=200)
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=80)
     password: str = Field(..., min_length=1, max_length=200)
     display_name: str = Field(..., min_length=1, max_length=120)
     badge_number: str = Field(..., min_length=1, max_length=80)
+    email: str | None = Field(default=None, max_length=200)
     role: str
     projects: list[str] | None = None
 
@@ -50,6 +58,7 @@ class UserUpdate(BaseModel):
     username: str = Field(..., min_length=1, max_length=80)
     display_name: str = Field(..., min_length=1, max_length=120)
     badge_number: str = Field(..., min_length=1, max_length=80)
+    email: str | None = Field(default=None, max_length=200)
     role: str
     password: str | None = Field(default=None, max_length=200)
     projects: list[str] | None = None

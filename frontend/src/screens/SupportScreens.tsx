@@ -2554,6 +2554,7 @@ function LegacyAdminScreen() {
     password: "",
     display_name: "",
     badge_number: "",
+    email: "",
     role: "operator",
   });
   const [showAddUser, setShowAddUser] = useState(false);
@@ -2582,6 +2583,7 @@ function LegacyAdminScreen() {
     password: "",
     display_name: "",
     badge_number: "",
+    email: "",
     role: "operator",
   };
 
@@ -2718,7 +2720,10 @@ function LegacyAdminScreen() {
     setAddingUser(true);
     setError(null);
     try {
-      await createUser(newUser);
+      await createUser({
+        ...newUser,
+        email: newUser.email.trim() || null,
+      });
       setNewUser(emptyNewUser);
       setShowAddUser(false);
       setUsers((await fetchUsers()).items);
@@ -3158,6 +3163,17 @@ function LegacyAdminScreen() {
               </label>
             </div>
             <div className="form-row">
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={newUser.email}
+                  placeholder="For password recovery later"
+                  onChange={(event) =>
+                    setNewUser({ ...newUser, email: event.target.value })
+                  }
+                />
+              </label>
               <label>
                 Role
                 <select

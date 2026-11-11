@@ -67,8 +67,10 @@ class UserRow(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(120))
     badge_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     role: Mapped[str] = mapped_column(String(20), index=True)
     password_hash: Mapped[str] = mapped_column(String(200))
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     projects: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
 
