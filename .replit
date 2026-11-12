@@ -1,0 +1,16 @@
+# SCC Platform — staging/runtime Replit config (do not publish without approval).
+# Single Uvicorn process serves FastAPI + Vite FRONTEND_DIST. No Vite dev server.
+
+run = "bash scripts/replit_start.sh"
+modules = ["nodejs-20", "postgresql-16", "python-3.12"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["bash", "scripts/replit_start.sh"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 8000
+externalPort = 80

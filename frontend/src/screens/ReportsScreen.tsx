@@ -19,7 +19,6 @@ import { useAuth } from "../auth/AuthContext";
 import { errorMessage } from "../lib/errors";
 import { printReportRoot } from "../lib/reportPrint";
 import { useProjectAccess } from "../lib/useProjectAccess";
-import { formatUserLabel } from "./shared";
 import {
   buildMonthlyWeatherMaxes,
   type DailyStationWeather,
@@ -565,7 +564,7 @@ function summarizeScoped(
 function buildWeeklyReports(
   packets: ReportPacket[],
   cases: CaseSummary[],
-  projectNames: string[],
+  projectNames: readonly string[],
 ): BuiltReport[] {
   const weeklyPackets = packets.filter((p) => p.kind === "weekly");
   const scopes =
@@ -642,7 +641,7 @@ function buildWeeklyReports(
 function buildMonthlyReports(
   packets: ReportPacket[],
   cases: CaseSummary[],
-  projectNames: string[],
+  projectNames: readonly string[],
 ): BuiltReport[] {
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -714,19 +713,6 @@ function typeStats(cases: CaseSummary[]) {
       closed: rows.filter((r) => r.status === "closed").length,
     };
   });
-}
-
-function topAiCategories(cases: CaseSummary[], limit = 8) {
-  const counts = new Map<string, number>();
-  for (const row of cases) {
-    if (row.record_type !== "ai_camera") continue;
-    const cat = String(row.fields?.category ?? "").trim() || "Uncategorized";
-    counts.set(cat, (counts.get(cat) || 0) + 1);
-  }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, limit)
-    .map(([label, count]) => ({ label, count }));
 }
 
 function overdueCases(cases: CaseSummary[]) {

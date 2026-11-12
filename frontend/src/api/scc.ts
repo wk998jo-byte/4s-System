@@ -1,3 +1,4 @@
+import { getMediaToken, getToken } from "../auth/session";
 import { getApiBaseUrl, joinUrl } from "./client";
 import { request } from "./http";
 
@@ -125,6 +126,7 @@ export const uploadImage = (file: File) => {
 /**
  * Turn a stored picture field into an `<img src>`.
  * Real uploads are `/uploads/...`; older prototype rows only stored a filename.
+ * Prefer short-lived media_token (attachment-only); fall back to access_token.
  */
 export function resolveMediaUrl(value: string | null | undefined): string | null {
   const v = (value || "").trim();
@@ -137,7 +139,18 @@ export function resolveMediaUrl(value: string | null | undefined): string | null
     return v;
   }
   if (v.startsWith("/uploads/") || v.startsWith("/api/")) {
-    return joinUrl(getApiBaseUrl(), v);
+    let url = joinUrl(getApiBaseUrl(), v);
+    if (v.startsWith("/uploads/")) {
+      const media = getMediaToken();
+      const access = getToken();
+      const sep = url.includes("?") ? "&" : "?";
+      if (media) {
+        url = `${url}${sep}media_token=${encodeURIComponent(media)}`;
+      } else if (access) {
+        url = `${url}${sep}access_token=${encodeURIComponent(access)}`;
+      }
+    }
+    return url;
   }
   return null;
 }

@@ -56,11 +56,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       login: async (username, password) => {
-        const result = await request<{ access_token: string; user: AuthUser }>(
-          "/api/v1/auth/login",
-          { method: "POST", body: JSON.stringify({ username, password }) },
-        );
-        saveSession(result.access_token, result.user);
+        const result = await request<{
+          access_token: string;
+          media_token?: string | null;
+          user: AuthUser;
+        }>("/api/v1/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        saveSession(result.access_token, result.user, result.media_token);
         setUser(result.user);
         if (!result.user.must_change_password) {
           window.location.hash = "#/dashboard";

@@ -106,9 +106,24 @@ export function buildReportPrintHtml(root: HTMLElement, reportId: string): strin
       new RegExp(`src="${bqLogo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g"),
       `src="${logoSrc}"`,
     );
+  const mediaToken =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("scc_media_token")
+      : null;
+  const accessToken =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("scc_token")
+      : null;
   const absoluteBody = bodyHtml
     .replace(/src="(\/assets\/[^"]+)"/g, `src="${window.location.origin}$1"`)
-    .replace(/src="(\/uploads\/[^"]+)"/g, `src="${apiOrigin}$1"`);
+    .replace(/src="(\/uploads\/[^"]+)"/g, (_m, path: string) => {
+      const base = `${apiOrigin}${path}`;
+      const token = mediaToken || accessToken;
+      if (!token) return `src="${base}"`;
+      const sep = base.includes("?") ? "&" : "?";
+      const param = mediaToken ? "media_token" : "access_token";
+      return `src="${base}${sep}${param}=${encodeURIComponent(token)}"`;
+    });
   return `<!doctype html><html><head><meta charset="utf-8"/><title>${reportId}</title>
       <style>${REPORT_PRINT_CSS}</style></head><body>${absoluteBody}</body></html>`;
 }

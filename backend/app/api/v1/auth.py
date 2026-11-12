@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.api.deps import get_current_user, require_admin
+from app.core.config import get_settings
 from app.schemas.auth import (
     ChangePasswordRequest,
     ConfirmDelete,
@@ -16,12 +17,19 @@ from app.schemas.auth import (
 )
 from app.services.auth import PERMISSION_MATRIX
 from app.services.platform_store import platform_store
+from app.services.rate_limit import auth_limiter, client_key
 
 router = APIRouter(tags=["Auth"])
 
 
+def _throttle_auth(request: Request, *parts: str) -> None:
+    limit = get_settings().auth_rate_limit_per_minute
+    auth_limiter(limit).check(client_key(request, *parts))
+
+
 @router.post("/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest) -> LoginResponse:
+def login(payload: LoginRequest, request: Request) -> LoginResponse:
+    _throttle_auth(request, "login", payload.username)
     try:
         result = platform_store.login(payload.username, payload.password)
     except ValueError as exc:
@@ -30,7 +38,10 @@ def login(payload: LoginRequest) -> LoginResponse:
 
 
 @router.post("/auth/password-recovery/request")
-def password_recovery_request(payload: PasswordRecoveryRequest) -> dict:
+def password_recovery_request(
+    payload: PasswordRecoveryRequest, request: Request
+) -> dict:
+    _throttle_auth(request, "recovery_request", payload.username)
     try:
         return platform_store.request_password_recovery(
             payload.username, payload.email
@@ -40,7 +51,10 @@ def password_recovery_request(payload: PasswordRecoveryRequest) -> dict:
 
 
 @router.post("/auth/password-recovery/reset")
-def password_recovery_reset(payload: PasswordRecoveryReset) -> dict:
+def password_recovery_reset(
+    payload: PasswordRecoveryReset, request: Request
+) -> dict:
+    _throttle_auth(request, "recovery_reset", payload.username)
     try:
         user = platform_store.reset_password_with_recovery_code(
             payload.username,

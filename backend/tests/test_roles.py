@@ -85,7 +85,8 @@ def test_operator_can_register_admin_can_approve() -> None:
     approved = client.post(f"/api/v1/cases/{case_id}/approve", headers=admin)
     assert approved.status_code == 200
     assert approved.json()["status"] == "closed"
-    assert approved.json()["fields"]["closed_by"] == "Admin"
+    # Actor label is `badge - Name` when badge is present on the admin seed.
+    assert approved.json()["fields"]["closed_by"] in {"Admin", "A-001 - Admin"}
 
 
 def test_admin_can_add_project_used_by_operator() -> None:

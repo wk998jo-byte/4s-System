@@ -618,7 +618,7 @@ export function HwScreen() {
     return !scoped || scoped.length === 0;
   }, [user?.role, user?.projects]);
 
-  const accessProjects = useMemo(() => {
+  const accessProjects = useMemo((): string[] => {
     if (hasAllProjectAccess) return [...HW_PROJECTS];
     const allowed = new Set((user?.projects || []).map(String));
     const matched = HW_PROJECTS.filter((p) => allowed.has(p));

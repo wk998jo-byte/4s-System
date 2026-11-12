@@ -11,14 +11,15 @@ from pathlib import Path
 import hashlib
 import secrets
 from secrets import token_urlsafe
-from threading import Lock
+from threading import RLock
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from sqlalchemy import text
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
-from app.db.engine import default_sqlite_url, make_engine, make_session_factory
+from app.db.engine import make_engine, make_session_factory, resolve_database_url
 from app.db.models import (
     AppStateRow,
     AssetClassificationRow,
@@ -274,15 +275,21 @@ class PlatformStore:
         self._engine = make_engine(self.database_url)
         self._sessions = make_session_factory(self._engine)
         self.catalog = Catalog(self._sessions)
-        self._lock = Lock()
+        self._lock = RLock()
         self._ensure_state()
 
     def storage_label(self) -> str:
-        if self.database_url.startswith("postgresql"):
+        url = (self.database_url or "").lower()
+        if url.startswith("postgresql") or url.startswith("postgres"):
             return "postgresql"
-        if ":memory:" in self.database_url:
+        if ":memory:" in url:
             return "sqlite_memory"
         return "sqlite"
+
+    def ping_database(self) -> None:
+        """Lightweight connectivity check for readiness probes."""
+        with self._sessions() as session:
+            session.execute(text("SELECT 1"))
 
     def _ensure_state(self) -> None:
         with self._sessions() as session:
@@ -317,52 +324,84 @@ class PlatformStore:
         self._seed_key_personnel_ras_tanura_v4()
         self._seed_key_personnel_dhahran_v5()
         self._seed_key_personnel_dhahran_trim_v6()
-        self._seed_sla_demo_cases()
-        self._seed_dashcam_demo_cases()
-        self._seed_speed_demo_cases()
-        self._seed_sos_demo_cases()
-        self._seed_itqan_demo_cases()
+        # Demo operational cases (SLA/dashcam/speed/SOS/ITQAN) — never in production
+        # unless SEED_DEMO_CASES is explicitly enabled.
+        if get_settings().demo_cases_enabled:
+            self._seed_sla_demo_cases()
+            self._seed_dashcam_demo_cases()
+            self._seed_speed_demo_cases()
+            self._seed_sos_demo_cases()
+            self._seed_itqan_demo_cases()
+
+    def _add_seed_user_row(self, session, item: dict) -> None:
+        session.add(
+            UserRow(
+                id=str(uuid4()),
+                username=item["username"],
+                display_name=item["display_name"],
+                badge_number=item.get("badge_number"),
+                role=item["role"],
+                password_hash=hash_password(item["password"]),
+                is_active=True,
+                projects=item.get("projects"),
+            )
+        )
+
+    def _bootstrap_admin_if_configured(self, session) -> bool:
+        """Create one admin from env when the user table is empty (production).
+
+        Returns True if an admin was created. Does not use hardcoded passwords.
+        """
+        settings = get_settings()
+        username = (settings.bootstrap_admin_username or "").strip().lower()
+        password = settings.bootstrap_admin_password or ""
+        if not username or not password:
+            return False
+        validate_password_strength(password)
+        session.add(
+            UserRow(
+                id=str(uuid4()),
+                username=username,
+                display_name=(settings.bootstrap_admin_display_name or "Admin").strip()
+                or "Admin",
+                badge_number=(settings.bootstrap_admin_badge or "A-001").strip()
+                or "A-001",
+                role="admin",
+                password_hash=hash_password(password),
+                must_change_password=True,
+                is_active=True,
+                projects=None,
+            )
+        )
+        return True
 
     def _seed_users(self) -> None:
+        settings = get_settings()
         with self._lock, self._sessions() as session:
             if session.query(UserRow).count() == 0:
-                for item in SEED_USERS:
-                    session.add(
-                        UserRow(
-                            id=str(uuid4()),
-                            username=item["username"],
-                            display_name=item["display_name"],
-                            badge_number=item.get("badge_number"),
-                            role=item["role"],
-                            password_hash=hash_password(item["password"]),
-                            is_active=True,
-                            projects=item.get("projects"),
-                        )
-                    )
+                if settings.demo_users_enabled:
+                    for item in SEED_USERS:
+                        self._add_seed_user_row(session, item)
+                else:
+                    # Production / locked-down mode: optional env bootstrap only.
+                    # Never insert weak default accounts. Existing DBs untouched.
+                    self._bootstrap_admin_if_configured(session)
                 session.commit()
                 return
-            # Backfill seed badge numbers / missing prototype users.
-            for item in SEED_USERS:
-                row = (
-                    session.query(UserRow)
-                    .filter(UserRow.username == item["username"])
-                    .one_or_none()
-                )
-                if row is None:
-                    session.add(
-                        UserRow(
-                            id=str(uuid4()),
-                            username=item["username"],
-                            display_name=item["display_name"],
-                            badge_number=item.get("badge_number"),
-                            role=item["role"],
-                            password_hash=hash_password(item["password"]),
-                            is_active=True,
-                            projects=item.get("projects"),
-                        )
+            # Backfill seed badge numbers / missing prototype users (dev/demo only).
+            # Never create default demo accounts in production, and never alter
+            # passwords of existing operational users.
+            if settings.demo_users_enabled:
+                for item in SEED_USERS:
+                    row = (
+                        session.query(UserRow)
+                        .filter(UserRow.username == item["username"])
+                        .one_or_none()
                     )
-                elif not row.badge_number and item.get("badge_number"):
-                    row.badge_number = item["badge_number"]
+                    if row is None:
+                        self._add_seed_user_row(session, item)
+                    elif not row.badge_number and item.get("badge_number"):
+                        row.badge_number = item["badge_number"]
             # Legacy admin UI briefly saved "project_pm"; that is the same role as receiver.
             session.query(UserRow).filter(UserRow.role == "project_pm").update(
                 {UserRow.role: "receiver"}
@@ -409,23 +448,70 @@ class PlatformStore:
                 raise ValueError("This account is inactive.")
             if not verify_password(password, row.password_hash):
                 raise ValueError("Incorrect password.")
+            now = datetime.now(timezone.utc)
+            settings = get_settings()
+            ttl = max(5, int(settings.session_ttl_minutes))
+            media_ttl = max(5, int(settings.media_token_ttl_minutes))
             token = token_urlsafe(32)
+            media_token = token_urlsafe(32)
             session.add(
                 SessionRow(
                     token=token,
                     user_id=row.id,
-                    created_at=datetime.now(timezone.utc),
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=ttl),
+                    purpose="api",
+                )
+            )
+            session.add(
+                SessionRow(
+                    token=media_token,
+                    user_id=row.id,
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=media_ttl),
+                    purpose="media",
                 )
             )
             session.commit()
-            return {"access_token": token, "token_type": "bearer", "user": self._user_out(row)}
+            return {
+                "access_token": token,
+                "token_type": "bearer",
+                "user": self._user_out(row),
+                "media_token": media_token,
+            }
 
     def logout(self, token: str) -> None:
+        """Invalidate the given token and any sibling media tokens for that user."""
         with self._lock, self._sessions() as session:
             row = session.get(SessionRow, token)
-            if row:
-                session.delete(row)
-                session.commit()
+            if not row:
+                return
+            user_id = row.user_id
+            session.delete(row)
+            # Drop short-lived media tokens for the same user on logout.
+            for sibling in (
+                session.query(SessionRow)
+                .filter(
+                    SessionRow.user_id == user_id,
+                    SessionRow.purpose == "media",
+                )
+                .all()
+            ):
+                session.delete(sibling)
+            session.commit()
+
+    def _session_is_expired(self, session_row: SessionRow) -> bool:
+        """True when the session must be rejected.
+
+        Upgrade note: rows created before expires_at existed have NULL expires_at
+        and are treated as expired so operators re-authenticate under the new TTL.
+        """
+        expires = session_row.expires_at
+        if expires is None:
+            return True
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > expires
 
     @staticmethod
     def _hash_recovery_code(code: str) -> str:
@@ -579,10 +665,26 @@ class PlatformStore:
             session.refresh(row)
             return self._user_out(row)
 
-    def user_from_token(self, token: str) -> dict | None:
-        with self._sessions() as session:
+    def user_from_token(
+        self, token: str, *, allow_media: bool = False
+    ) -> dict | None:
+        """Resolve a session token to a user.
+
+        API routes must use allow_media=False (default) so attachment-only
+        media tokens cannot call operational endpoints.
+        """
+        with self._lock, self._sessions() as session:
             session_row = session.get(SessionRow, token)
             if not session_row:
+                return None
+            purpose = getattr(session_row, "purpose", None) or "api"
+            if purpose == "media" and not allow_media:
+                return None
+            if purpose not in {"api", "media"}:
+                return None
+            if self._session_is_expired(session_row):
+                session.delete(session_row)
+                session.commit()
                 return None
             user = session.get(UserRow, session_row.user_id)
             if not user or not user.is_active:
@@ -610,6 +712,7 @@ class PlatformStore:
             )
             if exists:
                 raise ValueError("That username is already in use.")
+            validate_password_strength(payload.password)
             row = UserRow(
                 id=str(uuid4()),
                 username=username,
@@ -674,6 +777,7 @@ class PlatformStore:
             row.role = role
             row.projects = projects
             if new_password:
+                validate_password_strength(new_password)
                 row.password_hash = hash_password(new_password)
                 # Admin-set temp password for someone else → force change next login.
                 row.must_change_password = actor_id != user_id
@@ -1724,6 +1828,34 @@ class PlatformStore:
                 return refreshed or updated
         return updated
 
+    def _assert_unique_itqan_ref(
+        self, itqan_ref: str, *, exclude_id: str | None = None
+    ) -> None:
+        """ITQAN refs are globally unique (next_itqan_ref is a global sequence).
+
+        Existing duplicates are left in place; new creates/edits are rejected.
+        """
+        ref = (itqan_ref or "").strip()
+        if not ref:
+            raise ValueError("ITQAN reference is required.")
+        with self._sessions() as session:
+            rows = (
+                session.query(CaseRow)
+                .filter(
+                    CaseRow.record_type == "itqan",
+                    CaseRow.is_deleted.is_(False),
+                )
+                .all()
+            )
+            for row in rows:
+                if exclude_id and row.id == exclude_id:
+                    continue
+                existing = str((row.fields or {}).get("itqan_ref") or "").strip()
+                if existing == ref:
+                    raise ValueError(
+                        f"ITQAN reference '{ref}' is already in use."
+                    )
+
     def create_itqan(self, payload, actor: str | None = None) -> dict:
         project, department = self._require_assign(payload)
         vehicle = self.catalog.label("vehicle_type", payload.vehicle_type_id)
@@ -1735,41 +1867,46 @@ class PlatformStore:
             raise ValueError("Unknown or inactive ITQAN violation type.")
         if not itqan_status:
             raise ValueError("Unknown or inactive ITQAN status.")
-        year, week = week_from_date(payload.occurred_on)
-        occurred_dt = datetime.combine(payload.occurred_on, payload.occurred_time, tzinfo=AST)
-        pic = (payload.itqan_record_picture or "").strip() or None
-        record = {
-            "id": str(uuid4()),
-            "case_id": self.next_itqan_case_id(),
-            "record_type": "itqan",
-            "status": self._case_status_for_itqan(itqan_status),
-            "project": project,
-            "department": department,
-            "title": violation[:80],
-            "date": payload.occurred_on.isoformat(),
-            "week_year": year,
-            "week_number": week,
-            "risk_level": None,
-            "created_at": datetime.now(timezone.utc),
-            "fields": {
-                "assign_to": payload.assign_to,
-                "itqan_ref": payload.itqan_ref.strip(),
-                "itqan_status": itqan_status,
-                "violation_type": violation,
-                "vehicle_type": vehicle,
-                "driver_name": payload.driver_name.strip(),
-                "driver_badge_number": payload.driver_badge_number.strip(),
-                "occurred_time": payload.occurred_time.strftime("%H:%M"),
-                "source": "Manual entry",
-                "source_case_id": None,
-                "source_record_type": None,
-                "source_case_label": None,
-                "itqan_upload_proof": pic,
-                "reported_by": (actor or payload.reported_by).strip(),
-                "registered_at": occurred_dt.astimezone(timezone.utc).isoformat(),
-            },
-        }
-        return self._insert_case(record)
+        ref = payload.itqan_ref.strip()
+        with self._lock:
+            self._assert_unique_itqan_ref(ref)
+            year, week = week_from_date(payload.occurred_on)
+            occurred_dt = datetime.combine(
+                payload.occurred_on, payload.occurred_time, tzinfo=AST
+            )
+            pic = (payload.itqan_record_picture or "").strip() or None
+            record = {
+                "id": str(uuid4()),
+                "case_id": self.next_itqan_case_id(),
+                "record_type": "itqan",
+                "status": self._case_status_for_itqan(itqan_status),
+                "project": project,
+                "department": department,
+                "title": violation[:80],
+                "date": payload.occurred_on.isoformat(),
+                "week_year": year,
+                "week_number": week,
+                "risk_level": None,
+                "created_at": datetime.now(timezone.utc),
+                "fields": {
+                    "assign_to": payload.assign_to,
+                    "itqan_ref": ref,
+                    "itqan_status": itqan_status,
+                    "violation_type": violation,
+                    "vehicle_type": vehicle,
+                    "driver_name": payload.driver_name.strip(),
+                    "driver_badge_number": payload.driver_badge_number.strip(),
+                    "occurred_time": payload.occurred_time.strftime("%H:%M"),
+                    "source": "Manual entry",
+                    "source_case_id": None,
+                    "source_record_type": None,
+                    "source_case_label": None,
+                    "itqan_upload_proof": pic,
+                    "reported_by": (actor or payload.reported_by).strip(),
+                    "registered_at": occurred_dt.astimezone(timezone.utc).isoformat(),
+                },
+            }
+            return self._insert_case(record)
 
     def update_itqan_status(
         self, case_id: str, payload, actor: str | None = None
@@ -2011,6 +2148,10 @@ class PlatformStore:
                 else:
                     fields[key] = value
 
+            if row.record_type == "itqan" and "itqan_ref" in incoming:
+                new_ref = str(fields.get("itqan_ref") or "").strip()
+                self._assert_unique_itqan_ref(new_ref, exclude_id=case_id)
+
             if payload.project is not None:
                 project = payload.project.strip()
                 row.project = project or None
@@ -2060,6 +2201,50 @@ class PlatformStore:
             if not row.get("project") or row.get("project") in allowed_set
         ]
 
+    def record_upload_owner(self, stored_name: str, user_id: str) -> None:
+        """Remember who uploaded a file (orphan ACL)."""
+        name = (stored_name or "").strip()
+        uid = (user_id or "").strip()
+        if not name or not uid:
+            return
+        with self._lock, self._sessions() as session:
+            row = session.get(AppStateRow, "upload_owners")
+            owners = dict((row.value if row else None) or {})
+            owners[name] = uid
+            if row is None:
+                session.add(AppStateRow(key="upload_owners", value=owners))
+            else:
+                row.value = owners
+                flag_modified(row, "value")
+            session.commit()
+
+    def user_can_access_upload(self, user: dict | None, stored_name: str) -> bool:
+        """Whether the signed-in user may read an attachment file.
+
+        Admins always may. If the file is referenced on one or more cases, the
+        user must be allowed to see at least one of those cases (project scope).
+        Unreferenced (orphan) files are readable only by the uploader or admin.
+        """
+        if not user:
+            return False
+        if user.get("role") == "admin":
+            return True
+        needle = f"/uploads/{stored_name}"
+        matches: list[dict] = []
+        for row in self.list_cases():
+            blob = str(row.get("fields") or {})
+            if needle in blob or stored_name in blob:
+                matches.append(row)
+        if matches:
+            visible = self.filter_cases_for_user(matches, user)
+            return bool(visible)
+        # Orphan / not yet linked: uploader only.
+        with self._sessions() as session:
+            row = session.get(AppStateRow, "upload_owners")
+            owners = dict((row.value if row else None) or {})
+        owner_id = owners.get(stored_name)
+        return bool(owner_id and owner_id == user.get("id"))
+
     def list_cases(
         self,
         record_type: str | None = None,
@@ -2090,23 +2275,32 @@ class PlatformStore:
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> tuple[date, date]:
+        """Resolve dashboard/report period to inclusive Asia/Riyadh calendar dates."""
         today = datetime.now(AST).date()
-        if period == "custom":
+        key = (period or "").strip().lower()
+        if key == "custom":
             if not start_date or not end_date:
                 raise ValueError("Custom period requires start_date and end_date.")
             if start_date > end_date:
                 raise ValueError("start_date must be on or before end_date.")
             return start_date, end_date
-        if period == "last_week":
+        if key == "all":
+            # Full authorized history — wide inclusive bounds in AST calendar days.
+            return date(1970, 1, 1), date(2100, 12, 31)
+        if key == "last_week":
             offset = (today.weekday() + 1) % 7
             this_sunday = today - timedelta(days=offset)
             start = this_sunday - timedelta(days=7)
             return start, this_sunday - timedelta(days=1)
-        if period == "this_month":
+        if key == "this_month":
             return today.replace(day=1), today
-        offset = (today.weekday() + 1) % 7
-        start = today - timedelta(days=offset)
-        return start, today
+        if key == "this_week":
+            offset = (today.weekday() + 1) % 7
+            start = today - timedelta(days=offset)
+            return start, today
+        raise ValueError(
+            "Unknown period. Use this_week, last_week, this_month, custom, or all."
+        )
 
     def in_period(self, row: dict, start: date, end: date) -> bool:
         value = date.fromisoformat(row["date"])
@@ -2127,7 +2321,13 @@ class PlatformStore:
             rows = [row for row in rows if row.get("department")]
             if department:
                 rows = [row for row in rows if row["department"] == department]
-        elif view != "overall":
+        elif view == "overall":
+            # Project/department filters apply in overall view too (Phase 2 FAIL).
+            if project:
+                rows = [row for row in rows if row.get("project") == project]
+            if department:
+                rows = [row for row in rows if row.get("department") == department]
+        else:
             raise ValueError("View must be overall, projects, or departments.")
         return rows
 
@@ -2144,10 +2344,15 @@ class PlatformStore:
         start, end = self.period_bounds(period, start_date, end_date)
         allowed = user.get("projects") if user else None
         allowed_set = {str(item) for item in allowed} if allowed else None
-        if allowed_set and project and project not in allowed_set:
-            project = None
+        # Unauthorized project filter must not fall back to all projects.
+        denied_project = bool(
+            allowed_set and project and project not in allowed_set
+        )
         base_rows = self.filter_cases_for_user(self.list_cases(), user)
-        scoped = self._apply_view(base_rows, view, project, department)
+        if denied_project:
+            scoped: list[dict] = []
+        else:
+            scoped = self._apply_view(base_rows, view, project, department)
         rows = [row for row in scoped if self.in_period(row, start, end)]
         by_type = {"ai_camera": 0, "dashcam": 0, "speed": 0, "sos": 0, "itqan": 0}
         by_status = {"open": 0, "under_process": 0, "closed": 0}
@@ -2181,12 +2386,16 @@ class PlatformStore:
         today = datetime.now(AST).date()
         for i in range(7, -1, -1):
             day = today - timedelta(days=i * 7)
-            _y, week = week_from_date(day)
+            year, week = week_from_date(day)
             counts = {"ai_camera": 0, "dashcam": 0, "speed": 0, "sos": 0, "itqan": 0}
             for row in scoped:
-                if row["week_number"] == week and row["record_type"] in counts:
+                if (
+                    row.get("week_year") == year
+                    and row.get("week_number") == week
+                    and row["record_type"] in counts
+                ):
                     counts[row["record_type"]] += 1
-            series.append({"week": week, **counts})
+            series.append({"week": week, "week_year": year, **counts})
         by_department: dict[str, int] = {}
         for row in rows:
             if row.get("department"):
@@ -6067,8 +6276,12 @@ class PlatformStore:
         today = datetime.now(AST).date()
         for i in range(7, -1, -1):
             day = today - timedelta(days=i * 7)
-            _y, week = week_from_date(day)
-            week_rows = [row for row in all_rows if row["week_number"] == week]
+            year, week = week_from_date(day)
+            week_rows = [
+                row
+                for row in all_rows
+                if row.get("week_year") == year and row.get("week_number") == week
+            ]
             if record_type:
                 week_rows = [
                     row for row in week_rows if row["record_type"] == record_type
@@ -6079,6 +6292,7 @@ class PlatformStore:
             series.append(
                 {
                     "week": week,
+                    "week_year": year,
                     "registered": metrics["registered"],
                     "uploaded": metrics["uploaded"],
                     "close_outs": metrics["close_outs"],
@@ -6132,7 +6346,9 @@ class PlatformStore:
             },
         }
 
-        operator_names = sorted(current_operators)
+        # Filter dropdown: known operators (identity map) ∪ anyone in this period.
+        current_operators = set(badge_by_canonical.keys()) | set(operators.keys())
+        operator_names = sorted(name for name in current_operators if name)
         projects = sorted(
             {row["project"] for row in all_rows if row.get("project")}
         )
@@ -6329,6 +6545,4 @@ class PlatformStore:
         }
 
 
-platform_store = PlatformStore(
-    database_url=get_settings().database_url or default_sqlite_url()
-)
+platform_store = PlatformStore(database_url=resolve_database_url())

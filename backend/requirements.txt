@@ -10,3 +10,5 @@ sqlalchemy==2.0.44
 psycopg[binary]==3.2.9
 openpyxl==3.1.5
 fpdf2==2.8.4
+# Replit App Storage object SDK (MEDIA_BACKEND=replit). Optional off-Replit.
+replit-object-storage==1.0.2

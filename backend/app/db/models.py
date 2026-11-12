@@ -81,6 +81,12 @@ class SessionRow(Base):
     token: Mapped[str] = mapped_column(String(80), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # NULL on legacy rows → treated as expired (force re-login after upgrade).
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # "api" = full Bearer session; "media" = short-lived attachment-only token.
+    purpose: Mapped[str] = mapped_column(String(16), default="api")
 
 
 class AppStateRow(Base):

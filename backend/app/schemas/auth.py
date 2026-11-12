@@ -37,6 +37,8 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+    # Short-lived attachment token for /uploads img tags (not usable as API Bearer).
+    media_token: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):

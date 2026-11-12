@@ -301,7 +301,7 @@ export function SelectList({
   hint?: string;
   hideNotes?: boolean;
   /** When set, only these labels appear (used for project-access scoping). */
-  allowedLabels?: string[] | null;
+  allowedLabels?: readonly string[] | null;
   disabled?: boolean;
 }) {
   const { items, notes, error, loaded } = useList(type);

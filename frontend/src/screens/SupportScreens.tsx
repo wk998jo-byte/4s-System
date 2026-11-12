@@ -9,7 +9,6 @@ import {
 import {
   addListItem,
   deleteListItem,
-  approveCase,
   closeOutAiCamera,
   closeSos,
   confirmDriver,
@@ -17,7 +16,6 @@ import {
   createUser,
   deleteCase,
   deleteUser,
-  fetchCase,
   fetchCases,
   fetchCatalog,
   createContact,
@@ -31,8 +29,6 @@ import {
   fetchPlatformSettings,
   notifyCasesChanged,
   savePlatformSettings,
-  putJson,
-  rejectCase,
   updateCase,
   updateListItem,
   updateUser,
@@ -83,7 +79,7 @@ function formatReviewDate(iso: string): string {
 
 const ITQAN_ACTION = "The Violation has been uploaded in ITQAN";
 
-function canCloseOutFromReview(row: Pick<CaseSummary, "status" | "record_type">) {
+export function canCloseOutFromReview(row: Pick<CaseSummary, "status" | "record_type">) {
   return (
     row.status === "open" &&
     (row.record_type === "ai_camera" ||
@@ -477,7 +473,7 @@ function FileGlyph() {
   );
 }
 
-function EditGlyph() {
+export function EditGlyph() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">
       <path
@@ -1134,7 +1130,7 @@ function asCaseDetail(row: CaseDetail): CaseDetail {
   };
 }
 
-function ReviewCloseOut({
+export function ReviewCloseOut({
   detail,
   onDone,
   onDeleted,
@@ -1957,7 +1953,7 @@ export function ReviewScreen({
   );
 }
 
-function ReportActionIcon({ name }: { name: "check" | "download" }) {
+export function ReportActionIcon({ name }: { name: "check" | "download" }) {
   const common = {
     viewBox: "0 0 24 24",
     fill: "none",
@@ -2572,7 +2568,7 @@ type UserDraft = {
 };
 
 /** Legacy admin UI retained for reference; App uses screens/AdminScreen.tsx */
-function LegacyAdminScreen() {
+export function LegacyAdminScreen() {
   const { user: currentUser } = useAuth();
   const [types, setTypes] = useState<string[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});

@@ -158,10 +158,6 @@ const HEAT_INDEX_GUIDE = [
   },
 ] as const;
 
-function pad(n: number) {
-  return String(n).padStart(2, "0");
-}
-
 function fmtDate(isoOrMs: string | number) {
   const d =
     typeof isoOrMs === "number"
@@ -743,7 +739,7 @@ function WeeklyLogDrawer({
   remarks: string;
   onRemarks: (v: string) => void;
   onSubmit?: () => void;
-  projects?: string[];
+  projects?: readonly string[];
   weekOptions?: Array<{ startIso: string; label: string }>;
   onProjectChange?: (project: string) => void;
   onWeekChange?: (weekStartIso: string) => void;

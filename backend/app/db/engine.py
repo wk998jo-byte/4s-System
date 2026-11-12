@@ -21,12 +21,46 @@ def default_sqlite_url() -> str:
     return sqlite_file_url(data_dir / "scc_platform.db")
 
 
+def resolve_database_url(configured: str | None = None) -> str:
+    """Resolve the active DB URL with production safety rules.
+
+    Production must use PostgreSQL via DATABASE_URL — never fall back to SQLite.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    url = (configured if configured is not None else settings.database_url or "").strip()
+    if settings.is_production:
+        if not url:
+            raise RuntimeError(
+                "Production requires DATABASE_URL pointing at PostgreSQL."
+            )
+        lowered = url.lower()
+        if lowered.startswith("sqlite") or "scc_platform.db" in lowered:
+            raise RuntimeError(
+                "Production forbids SQLite DATABASE_URL; configure PostgreSQL."
+            )
+        if not (
+            lowered.startswith("postgresql")
+            or lowered.startswith("postgres")
+        ):
+            raise RuntimeError(
+                "Production DATABASE_URL must use a PostgreSQL dialect "
+                "(postgresql+psycopg://…)."
+            )
+        return url
+    return url or default_sqlite_url()
+
+
 def make_engine(url: str) -> Engine:
     kwargs: dict = {"future": True}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         if ":memory:" in url:
             kwargs["poolclass"] = StaticPool
+    elif url.startswith("postgresql") or url.startswith("postgres"):
+        # Recycle dead connections after Replit / proxy idle timeouts.
+        kwargs["pool_pre_ping"] = True
     return create_engine(url, **kwargs)
 
 
@@ -53,6 +87,17 @@ def _migrate_sqlite(engine: Engine) -> None:
                 text(
                     "ALTER TABLE users ADD COLUMN must_change_password "
                     "BOOLEAN DEFAULT 0 NOT NULL"
+                )
+            )
+        session_cols = conn.execute(text("PRAGMA table_info(sessions)")).fetchall()
+        session_names = {row[1] for row in session_cols}
+        if session_names and "expires_at" not in session_names:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN expires_at DATETIME"))
+        if session_names and "purpose" not in session_names:
+            conn.execute(
+                text(
+                    "ALTER TABLE sessions ADD COLUMN purpose VARCHAR(16) "
+                    "DEFAULT 'api' NOT NULL"
                 )
             )
 
