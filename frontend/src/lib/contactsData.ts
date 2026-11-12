@@ -94,6 +94,45 @@ function emptyRows(positions: string[]): ContactPerson[] {
 
 /** Shared empty layout used for projects not yet filled. */
 function emptyProjectPack(id: ContactProjectId): ProjectContacts {
+  const groups: ContactGroup[] = [];
+  // Dhahran omits Saudi Aramco PMT and the shared emergency/hospital blocks.
+  if (id !== "Dhahran") {
+    groups.push({
+      name: "Saudi Aramco PMT",
+      rows: emptyRows([
+        "SAPMT Lead Engineer",
+        "SAPMT Project Engineer",
+        "Field Compliance Coordinator",
+      ]),
+    });
+  }
+  groups.push(
+    {
+      name: "Bin Quraya",
+      red: true,
+      rows: emptyRows([
+        "Project Manager",
+        "Construction Manager",
+        "HSE Manager",
+      ]),
+    },
+    {
+      name: "Safety Team",
+      rows: emptyRows([
+        "Safety Manager",
+        "Safety Supervisor",
+        "Project Medic",
+      ]),
+    },
+    {
+      name: "Logistics Team",
+      rows: emptyRows(["Logistics Coordinator"]),
+    },
+    {
+      name: "SCC Team",
+      rows: emptyRows(["SCC Operator"]),
+    },
+  );
   return {
     id,
     division: "",
@@ -102,42 +141,8 @@ function emptyProjectPack(id: ContactProjectId): ProjectContacts {
     client: "Saudi Aramco",
     hotline: "",
     placeholder: true,
-    groups: [
-      {
-        name: "Saudi Aramco PMT",
-        rows: emptyRows([
-          "SAPMT Lead Engineer",
-          "SAPMT Project Engineer",
-          "Field Compliance Coordinator",
-        ]),
-      },
-      {
-        name: "Bin Quraya",
-        red: true,
-        rows: emptyRows([
-          "Project Manager",
-          "Construction Manager",
-          "HSE Manager",
-        ]),
-      },
-      {
-        name: "Safety Team",
-        rows: emptyRows([
-          "Safety Manager",
-          "Safety Supervisor",
-          "Project Medic",
-        ]),
-      },
-      {
-        name: "Logistics Team",
-        rows: emptyRows(["Logistics Coordinator"]),
-      },
-      {
-        name: "SCC Team",
-        rows: emptyRows(["SCC Operator"]),
-      },
-    ],
-    hospitals: [{ name: "[Nearest hospital]", number: "[Number]" }],
+    groups,
+    hospitals: id === "Dhahran" ? [] : [{ name: "[Nearest hospital]", number: "[Number]" }],
   };
 }
 

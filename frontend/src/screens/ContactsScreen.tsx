@@ -252,7 +252,7 @@ function ContactTable({
 }
 
 function defaultContactProject(
-  accessProjects: string[],
+  accessProjects: readonly string[],
   singleProject: string | null,
   hasAllProjectAccess: boolean,
 ): ContactProjectId {
@@ -327,6 +327,7 @@ export function ContactsScreen() {
   }, [initialProject, projectAccess.hasAllProjectAccess]);
 
   const pack = packs[project] ?? CONTACTS_BY_PROJECT[project];
+  const isDhahran = project === "Dhahran";
   const emergency = {
     landline: pack.emergency?.landline || ARAMCO_EMERGENCY.landline,
     mobile: pack.emergency?.mobile || ARAMCO_EMERGENCY.mobile,
@@ -533,7 +534,10 @@ export function ContactsScreen() {
         </div>
 
         <div className="kp-pack-body">
-          {(pack.groups ?? []).map((group, gi) => (
+          {(pack.groups ?? [])
+            .map((group, gi) => ({ group, gi }))
+            .filter(({ group }) => !(isDhahran && group.name === "Saudi Aramco PMT"))
+            .map(({ group, gi }) => (
             <div key={`${group.name}-${gi}`}>
               <ContactTable
                 group={group}
@@ -550,6 +554,8 @@ export function ContactsScreen() {
             </div>
           ))}
 
+          {!isDhahran ? (
+            <>
           <div className="kp-grid g2">
             <div>
               <div className="kp-ct-head">Saudi Aramco emergency contact number</div>
@@ -628,6 +634,8 @@ export function ContactsScreen() {
               </div>
             </div>
           </div>
+            </>
+          ) : null}
         </div>
       </section>
     </section>

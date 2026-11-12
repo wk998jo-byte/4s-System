@@ -316,6 +316,7 @@ class PlatformStore:
         self._seed_key_personnel_yanbu_v3()
         self._seed_key_personnel_ras_tanura_v4()
         self._seed_key_personnel_dhahran_v5()
+        self._seed_key_personnel_dhahran_trim_v6()
         self._seed_sla_demo_cases()
         self._seed_dashcam_demo_cases()
         self._seed_speed_demo_cases()
@@ -3046,12 +3047,49 @@ class PlatformStore:
             )
             session.commit()
 
+    def _seed_key_personnel_dhahran_trim_v6(self) -> None:
+        """Dhahran-only: drop Saudi Aramco PMT group and hospital list once."""
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "key_personnel_seeded_dhahran_v6") is not None:
+                return
+            existing = session.get(AppStateRow, "key_personnel")
+            packs = (
+                dict(existing.value)
+                if existing and isinstance(existing.value, dict)
+                else {}
+            )
+            current = packs.get("Dhahran")
+            if isinstance(current, dict):
+                pack = dict(current)
+                groups = pack.get("groups")
+                if isinstance(groups, list):
+                    pack["groups"] = [
+                        g
+                        for g in groups
+                        if not (
+                            isinstance(g, dict)
+                            and str(g.get("name", "")) == "Saudi Aramco PMT"
+                        )
+                    ]
+                pack["hospitals"] = []
+                packs["Dhahran"] = pack
+                if existing:
+                    existing.value = packs
+                    flag_modified(existing, "value")
+                else:
+                    session.add(AppStateRow(key="key_personnel", value=packs))
+            session.add(
+                AppStateRow(key="key_personnel_seeded_dhahran_v6", value=True)
+            )
+            session.commit()
+
     def get_key_personnel(self) -> dict:
         self._seed_key_personnel_v1()
         self._seed_key_personnel_mgs_v2()
         self._seed_key_personnel_yanbu_v3()
         self._seed_key_personnel_ras_tanura_v4()
         self._seed_key_personnel_dhahran_v5()
+        self._seed_key_personnel_dhahran_trim_v6()
         with self._sessions() as session:
             row = session.get(AppStateRow, "key_personnel")
             if row and isinstance(row.value, dict):

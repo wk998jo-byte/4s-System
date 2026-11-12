@@ -15,15 +15,10 @@ def _empty_rows(positions: list[str]) -> list[dict]:
 
 
 def empty_project_pack(project_id: str) -> dict:
-    return {
-        "id": project_id,
-        "division": "",
-        "title": f"{project_id} Project – Key Personnel & Emergency Contacts",
-        "contract": "",
-        "client": "Saudi Aramco",
-        "hotline": "",
-        "placeholder": True,
-        "groups": [
+    groups: list[dict] = []
+    # Dhahran omits Saudi Aramco PMT (and emergency/hospital blocks are UI-only).
+    if project_id != "Dhahran":
+        groups.append(
             {
                 "name": "Saudi Aramco PMT",
                 "rows": _empty_rows(
@@ -33,7 +28,10 @@ def empty_project_pack(project_id: str) -> dict:
                         "Field Compliance Coordinator",
                     ]
                 ),
-            },
+            }
+        )
+    groups.extend(
+        [
             {
                 "name": "Bin Quraya",
                 "red": True,
@@ -59,8 +57,22 @@ def empty_project_pack(project_id: str) -> dict:
                 "name": "SCC Team",
                 "rows": _empty_rows(["SCC Operator"]),
             },
-        ],
-        "hospitals": [{"name": "[Nearest hospital]", "number": "[Number]"}],
+        ]
+    )
+    return {
+        "id": project_id,
+        "division": "",
+        "title": f"{project_id} Project – Key Personnel & Emergency Contacts",
+        "contract": "",
+        "client": "Saudi Aramco",
+        "hotline": "",
+        "placeholder": True,
+        "groups": groups,
+        "hospitals": (
+            []
+            if project_id == "Dhahran"
+            else [{"name": "[Nearest hospital]", "number": "[Number]"}]
+        ),
     }
 
 
