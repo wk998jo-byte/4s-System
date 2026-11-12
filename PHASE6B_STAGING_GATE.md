@@ -2,6 +2,7 @@
 
 **Date:** 2026-11-12  
 **Branch (local only):** `staging/phase6b-rc`  
+**RC revision:** `26c88e3` (not pushed)  
 **Base:** `main` @ `128ce49`  
 **Scope:** Staging RC prep, App Storage object adapter, Replit runtime artifacts  
 **Safety:** No publish. No push. No ops SQLite migration. Synthetic data only.
@@ -57,7 +58,7 @@ bash scripts/replit_start.sh
 | Action | Status |
 |--------|--------|
 | Local branch `staging/phase6b-rc` | Created |
-| Commit RC on that branch | Pending operator “commit RC” if desired |
+| Commit RC on that branch | **Done locally** (`26c88e3`) |
 | Push to origin | **Not authorized** |
 | Publish Replit | **Not authorized** |
 
@@ -130,7 +131,7 @@ Artifacts: `.replit`, `scripts/replit_start.sh`.
 |-------|--------|
 | **Exact target Replit project** | **UNKNOWN — operator must name staging Repl** |
 | **Not production?** | Must be confirmed by operator before publish |
-| **Git revision / RC** | Working tree on `staging/phase6b-rc` (unpushed); base `128ce49` |
+| **Git revision / RC** | `26c88e3` on `staging/phase6b-rc` (**unpushed**); base `128ce49` |
 | **Staging DB identity** | **Not provisioned** (redacted N/A) |
 | **App Storage bucket** | **Not provisioned** |
 | **Deployment type** | `.replit` → `cloudrun` target (verify in UI) |
