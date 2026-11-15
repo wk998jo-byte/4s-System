@@ -312,8 +312,13 @@ class PlatformStore:
         self._migrate_sos_devices_split()
         self._migrate_hw_catalog_v1()
         self._migrate_itqan_status_finished()
-        self._seed_hw_inventory_v1()
-        self._seed_hw_department_v1()
+        # Synthetic HW counts / named Key Personnel: off in production unless
+        # SEED_DEMO_FIXTURES=true (independent of case demos).
+        if get_settings().demo_fixtures_enabled:
+            self._seed_hw_inventory_v1()
+            self._seed_hw_department_v1()
+        else:
+            self._mark_hw_fixtures_skipped()
         self._migrate_ai_camera_locations_v1()
         self._seed_asset_classifications()
         self._seed_users()
@@ -971,14 +976,23 @@ class PlatformStore:
                 value = dict(hw.value or {})
                 project = dict(value.get("project") or {})
                 changed = sos is not None
+                # Synthetic V1 wearable matrix is demo-only. Production must keep
+                # empty counts empty so a restart never repopulates cleared HW.
+                allow_demo_deploy = get_settings().demo_fixtures_enabled
                 for site, counts in list(project.items()):
                     site_counts = dict(counts or {})
                     sos_n = int(site_counts.pop("SOS Devices", 0) or 0)
                     helmet = int(site_counts.get("Smart Helmet", 0) or 0)
                     watch = int(site_counts.get("Smart Watch", 0) or 0)
                     split = deploy.get(site)
-                    if split and helmet == 0 and watch == 0:
-                        # Empty wearables → apply V1 site deployment profile.
+                    if (
+                        allow_demo_deploy
+                        and split
+                        and helmet == 0
+                        and watch == 0
+                        and sos_n == 0
+                    ):
+                        # Empty wearables → apply V1 site deployment profile (dev/demo).
                         helmet = split["Smart Helmet"]
                         watch = split["Smart Watch"]
                         changed = True
@@ -1342,8 +1356,17 @@ class PlatformStore:
             ],
         }
 
+    def _mark_hw_fixtures_skipped(self) -> None:
+        """Record that production skipped HW demo seeds (idempotent; no data writes)."""
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "hw_demo_fixtures_skipped_v1") is None:
+                session.add(AppStateRow(key="hw_demo_fixtures_skipped_v1", value=True))
+                session.commit()
+
     def _seed_hw_inventory_v1(self) -> None:
         """Load the V1 SCC Hardware inventory into DB when inventory is still tiny/demo."""
+        if not get_settings().demo_fixtures_enabled:
+            return
         device_totals = [
             ("AI Camera", 68),
             ("Edge Server", 11),
@@ -1447,6 +1470,8 @@ class PlatformStore:
 
     def _seed_hw_department_v1(self) -> None:
         """Seed department device counts from the admin department list when empty."""
+        if not get_settings().demo_fixtures_enabled:
+            return
         state = self._align_hw(self._hw_state())
         dept = state.get("department") or {}
         current = sum(sum(int(n or 0) for n in counts.values()) for counts in dept.values())
@@ -3094,12 +3119,26 @@ class PlatformStore:
 
     def _seed_key_personnel_v1(self) -> None:
         """Persist Key Personnel packs once so Replit / SQLite keeps them."""
-        from app.services.key_personnel_seed import default_key_personnel_packs
+        from app.services.key_personnel_seed import (
+            default_key_personnel_packs,
+            empty_key_personnel_packs,
+        )
 
         with self._lock, self._sessions() as session:
             if session.get(AppStateRow, "key_personnel_seeded_v1") is not None:
                 return
             existing = session.get(AppStateRow, "key_personnel")
+            # Production: structural empty packs only — never named demo contacts.
+            if not get_settings().demo_fixtures_enabled:
+                if existing is None or not isinstance(existing.value, dict):
+                    session.add(
+                        AppStateRow(
+                            key="key_personnel", value=empty_key_personnel_packs()
+                        )
+                    )
+                session.add(AppStateRow(key="key_personnel_seeded_v1", value=True))
+                session.commit()
+                return
             defaults = default_key_personnel_packs()
             if existing is None or not isinstance(existing.value, dict):
                 session.add(AppStateRow(key="key_personnel", value=defaults))
@@ -3138,6 +3177,10 @@ class PlatformStore:
         with self._lock, self._sessions() as session:
             if session.get(AppStateRow, "key_personnel_seeded_mgs_v2") is not None:
                 return
+            if not get_settings().demo_fixtures_enabled:
+                session.add(AppStateRow(key="key_personnel_seeded_mgs_v2", value=True))
+                session.commit()
+                return
             existing = session.get(AppStateRow, "key_personnel")
             packs = dict(existing.value) if existing and isinstance(existing.value, dict) else {}
             current = packs.get("MGS")
@@ -3169,6 +3212,12 @@ class PlatformStore:
         with self._lock, self._sessions() as session:
             if session.get(AppStateRow, "key_personnel_seeded_yanbu_v3") is not None:
                 return
+            if not get_settings().demo_fixtures_enabled:
+                session.add(
+                    AppStateRow(key="key_personnel_seeded_yanbu_v3", value=True)
+                )
+                session.commit()
+                return
             existing = session.get(AppStateRow, "key_personnel")
             packs = dict(existing.value) if existing and isinstance(existing.value, dict) else {}
             current = packs.get("Yanbu")
@@ -3199,6 +3248,14 @@ class PlatformStore:
 
         with self._lock, self._sessions() as session:
             if session.get(AppStateRow, "key_personnel_seeded_ras_tanura_v4") is not None:
+                return
+            if not get_settings().demo_fixtures_enabled:
+                session.add(
+                    AppStateRow(
+                        key="key_personnel_seeded_ras_tanura_v4", value=True
+                    )
+                )
+                session.commit()
                 return
             existing = session.get(AppStateRow, "key_personnel")
             packs = (
@@ -3303,9 +3360,14 @@ class PlatformStore:
             row = session.get(AppStateRow, "key_personnel")
             if row and isinstance(row.value, dict):
                 return {str(k): dict(v) for k, v in row.value.items() if isinstance(v, dict)}
-        from app.services.key_personnel_seed import default_key_personnel_packs
+        from app.services.key_personnel_seed import (
+            default_key_personnel_packs,
+            empty_key_personnel_packs,
+        )
 
-        return default_key_personnel_packs()
+        if get_settings().demo_fixtures_enabled:
+            return default_key_personnel_packs()
+        return empty_key_personnel_packs()
 
     def save_key_personnel(self, packs: dict) -> dict:
         if not isinstance(packs, dict) or not packs:
@@ -5887,6 +5949,14 @@ class PlatformStore:
             row = session.get(AppStateRow, "hw_transfers")
             if row and isinstance(row.value, dict):
                 return row.value
+        empty = {"items": [], "register": []}
+        # Production / fixtures-off: persist empty so restarts never invent sample TRFs.
+        if not get_settings().demo_fixtures_enabled:
+            with self._lock, self._sessions() as session:
+                if session.get(AppStateRow, "hw_transfers") is None:
+                    session.add(AppStateRow(key="hw_transfers", value=empty))
+                    session.commit()
+            return empty
         sample = {
             "items": [
                 {
@@ -5902,8 +5972,9 @@ class PlatformStore:
             "register": [],
         }
         with self._lock, self._sessions() as session:
-            session.add(AppStateRow(key="hw_transfers", value=sample))
-            session.commit()
+            if session.get(AppStateRow, "hw_transfers") is None:
+                session.add(AppStateRow(key="hw_transfers", value=sample))
+                session.commit()
         return sample
 
     def receive_hw_transfer(self, transfer_id: str, *, actor: str) -> dict:
