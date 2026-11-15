@@ -53,6 +53,12 @@ def resolve_database_url(configured: str | None = None) -> str:
 
 
 def make_engine(url: str) -> Engine:
+    # Replit provides postgresql://; explicitly select installed psycopg 3.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    elif url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+
     kwargs: dict = {"future": True}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
