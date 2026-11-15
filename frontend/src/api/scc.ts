@@ -401,6 +401,12 @@ export interface HwRegisterImportResult {
 export const fetchHwRegister = () =>
   request<{ items: HwRegisterItem[]; total: number }>("/api/v1/hw/register");
 
+export const updateHwRegisterStatus = (id: string, status: string) =>
+  request<{ items: HwRegisterItem[] }>(`/api/v1/hw/register/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+
 export const createHwRegisterItem = (payload: {
   device: string;
   serial: string;
@@ -734,6 +740,7 @@ export interface ReportsPayload {
   by_department: Array<Record<string, string | number>>;
   details: CaseSummary[];
   packets?: ReportPacket[];
+  report_counts?: { stored_packets: number; generated: Record<string, number> };
   settings?: Record<string, unknown>;
 }
 
@@ -867,6 +874,12 @@ export const fetchHwTransfers = () =>
   request<{ items: Array<Record<string, unknown>>; register: Array<Record<string, unknown>> }>(
     "/api/v1/hw/transfers",
   );
+
+export const createHwTransfer = (body: Record<string, unknown>) =>
+  request<{ item: { id: string }; items: Array<Record<string, unknown>> }>("/api/v1/hw/transfers", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 export const receiveHwTransfer = (id: string) =>
   request<Record<string, unknown>>(`/api/v1/hw/transfers/${encodeURIComponent(id)}/receive`, {

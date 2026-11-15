@@ -234,10 +234,6 @@ function formatDay(iso: string) {
   return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
 }
 
-function isoDate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function riskKey(row: CaseSummary) {
   return (row.risk_level || "").replace(/\s*Risk$/i, "").trim() || "Low";
 }
@@ -347,18 +343,9 @@ function scheduleFromSettings(settings?: Record<string, unknown> | null) {
   };
 }
 
-/** True once local clock has reached the configured daily generation time. */
-function pastDailyCutoff(now: Date, dailyAt: string): boolean {
-  const [hs, ms] = normalizeDailyAt(dailyAt).split(":").map(Number);
-  const minutesNow = now.getHours() * 60 + now.getMinutes();
-  return minutesNow >= (hs ?? 23) * 60 + (ms ?? 59);
-}
-
-function buildDailyReports(
+export function buildDailyReports(
   cases: CaseSummary[],
   packets: ReportPacket[] = [],
-  now = new Date(),
-  dailyAt = "23:59",
 ): BuiltReport[] {
   const byDay = new Map<string, CaseSummary[]>();
   for (const row of cases) {
@@ -368,9 +355,6 @@ function buildDailyReports(
     list.push(row);
     byDay.set(key, list);
   }
-  const today = isoDate(now);
-  const genAt = normalizeDailyAt(dailyAt);
-  const todayDone = pastDailyCutoff(now, genAt);
   const packetByDay = new Map<string, ReportPacket>();
   for (const packet of packets) {
     if (packet.kind !== "daily") continue;
@@ -378,23 +362,17 @@ function buildDailyReports(
     if (day) packetByDay.set(day, packet);
   }
 
-  // Always show a calendar day for the last 30 days (even with 0 records),
-  // so quiet days between reports still appear once generated at dailyAt.
-  const days: string[] = [];
-  for (let offset = 0; offset < 30; offset += 1) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-    days.push(isoDate(d));
-  }
+  // Only persisted API packets are reports; the browser never invents periods.
+  const days = [...packetByDay.keys()].sort().reverse();
 
   return days.map((day) => {
     const rows = byDay.get(day) ?? [];
     const packet = packetByDay.get(day);
     const packetCompiling = Boolean(
-      packet && /compil|progress/i.test(String(packet.status || "")),
+      packet && /compil|progress|scheduled/i.test(String(packet.status || "")),
     );
-    const compiling = packet
-      ? packetCompiling
-      : day === today && !todayDone;
+    const compiling = packetCompiling;
+    const noSource = packet?.status === "No source data";
     const id = packet?.id || `DR-${day.replace(/-/g, "")}`;
     return {
       id,
@@ -408,10 +386,10 @@ function buildDailyReports(
       closed: rows.filter((r) => r.status === "closed").length,
       overdue: rows.filter((r) => isOverdue(r)).length,
       highRisk: rows.filter((r) => isHighRisk(r)).length,
-      generatedLabel: compiling
+      generatedLabel: noSource ? "No source data" : compiling
         ? "In progress"
-        : `${formatDay(day)}, ${genAt} · auto`,
-      status: compiling ? "Compiling" : packet?.status || "Generated",
+        : packet?.generated_at ? `${formatDay(packet.generated_at)} · auto` : "Not generated",
+      status: packet?.status || (compiling ? "Compiling" : "Not generated"),
       statusTone: compiling ? "compiling" : "generated",
       compiling,
       cases: rows,
@@ -436,22 +414,6 @@ function casesInScope(
   });
 }
 
-function projectCode(name: string, index: number) {
-  const letters = name.toUpperCase().replace(/[^A-Z]/g, "");
-  return (letters.slice(0, 3) || `P${index + 1}`).padEnd(3, "X").slice(0, 3);
-}
-
-/** Sunday–Saturday bounds for the week containing `day`. */
-function sundayWeekBounds(day: Date) {
-  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate());
-  const daysSinceSunday = (d.getDay() + 7) % 7; // Sun=0
-  const start = new Date(d);
-  start.setDate(d.getDate() - daysSinceSunday);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  return { start, end };
-}
-
 /** Sunday-start week number; week 1 contains 1 January (matches backend week_from_date). */
 function sundayWeekParts(day: Date): { year: number; week: number } {
   const value = new Date(day.getFullYear(), day.getMonth(), day.getDate());
@@ -463,11 +425,6 @@ function sundayWeekParts(day: Date): { year: number; week: number } {
   }
   const diffDays = Math.floor((value.getTime() - week1Sunday.getTime()) / 86400000);
   return { year: value.getFullYear(), week: Math.floor(diffDays / 7) + 1 };
-}
-
-function weeklyReportId(day: Date, projectName: string, index: number) {
-  const { year, week } = sundayWeekParts(day);
-  return `WR-${year}-W${String(week).padStart(2, "0")}-${projectCode(projectName, index)}`;
 }
 
 function monthlySignatureStatus(packet?: ReportPacket): string {
@@ -491,7 +448,9 @@ function summarizeScoped(
   const rows = casesInScope(cases, scope, fromIso, toIso);
   const packetStatus = packet?.status || "";
   // Do not use /sign/ here — it also matches "Signed".
-  const compiling = /progress|compil/i.test(packetStatus);
+  const compiling = /progress|compil|scheduled/i.test(packetStatus);
+  const noSource = packetStatus === "No source data";
+  const issued = Boolean(packet?.issued);
   const monthlyComplete =
     Boolean(packet?.signed) && Boolean(packet?.pm_signed);
   const signed =
@@ -501,7 +460,7 @@ function summarizeScoped(
   // Monthly status is always derived from who signed — never trust stale
   // Issued / Ready to issue / Awaiting PM labels from older packets.
   const status =
-    kind === "monthly"
+    noSource ? "No source data" : issued ? "Issued" : packetStatus === "Scheduled" ? "Scheduled" : kind === "monthly"
       ? compiling
         ? "Compiling"
         : monthlySignatureStatus(packet)
@@ -510,7 +469,7 @@ function summarizeScoped(
         : packet?.status || "Generated";
   const awaiting =
     kind === "monthly"
-      ? !compiling && !monthlyComplete
+      ? !compiling && !noSource && !issued && !monthlyComplete
       : /awaiting/i.test(packetStatus) &&
         !(packet?.signed || /^signed$/i.test(packetStatus));
   const a = new Date(`${fromIso}T00:00:00`);
@@ -531,17 +490,11 @@ function summarizeScoped(
     closed: rows.filter((r) => r.status === "closed").length,
     overdue: rows.filter((r) => isOverdue(r)).length,
     highRisk: rows.filter((r) => isHighRisk(r)).length,
-    generatedLabel: compiling
+    generatedLabel: noSource ? "No source data" : compiling
       ? "In progress"
-      : kind === "weekly"
-        ? packet?.generated_at
-          ? `${formatDay(packet.generated_at)} · auto`
-          : `${formatDay(toIso)}, 23:59 · auto`
-        : packet?.generated_at
-          ? `${formatDay(packet.generated_at)} · auto`
-          : `${formatDay(fromIso)}, 00:00 · auto`,
+      : packet?.generated_at ? `${formatDay(packet.generated_at)} · auto` : "Not generated",
     status,
-    statusTone: signed
+    statusTone: issued ? "issued" : signed
       ? "signed"
       : awaiting
         ? "awaiting"
@@ -555,151 +508,37 @@ function summarizeScoped(
         ? {
             ...packet,
             status,
-            issued: null,
+            issued: packet.issued,
           }
         : packet,
   };
 }
 
-function buildWeeklyReports(
+export function buildWeeklyReports(
   packets: ReportPacket[],
   cases: CaseSummary[],
   projectNames: readonly string[],
 ): BuiltReport[] {
   const weeklyPackets = packets.filter((p) => p.kind === "weekly");
-  const scopes =
-    projectNames.length > 0
-      ? projectNames
-      : ([...new Set(weeklyPackets.map((p) => p.scope).filter(Boolean))] as string[]);
-
-  // Prefer API packets (already WR-YYYY-Www-CODE × projects). Fall back to local weeks.
-  if (weeklyPackets.length) {
-    const scopedPackets =
-      projectNames.length > 0
-        ? weeklyPackets.filter((p) => !p.scope || scopes.includes(p.scope))
-        : weeklyPackets;
-    return [...scopedPackets]
-      .sort((a, b) => `${b.b}${a.scope}`.localeCompare(`${a.b}${b.scope}`))
-      .map((packet, index) => {
-        const scope = packet.scope || scopes[0] || "All projects";
-        const end = packet.b ? new Date(`${packet.b}T00:00:00`) : new Date();
-        const scopeIndex = Math.max(0, scopes.indexOf(scope));
-        const id =
-          packet.id && /-W\d{2}-/.test(packet.id)
-            ? packet.id
-            : weeklyReportId(end, scope, scopeIndex >= 0 ? scopeIndex : index);
-        return summarizeScoped(
-          "weekly",
-          id,
-          scope,
-          packet.a,
-          packet.b,
-          cases,
-          { ...packet, id },
-        );
-      });
-  }
-
-  const now = new Date();
-  const { start: currentSunday } = sundayWeekBounds(now);
-  const weekCount = 6;
-  const built: BuiltReport[] = [];
-  for (let weekOffset = 0; weekOffset < weekCount; weekOffset += 1) {
-    const weekStart = new Date(currentSunday);
-    weekStart.setDate(currentSunday.getDate() - 7 * weekOffset);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    const a = isoDate(weekStart);
-    const b = isoDate(weekEnd);
-    const { week } = sundayWeekParts(weekEnd);
-    scopes.forEach((scope, index) => {
-      const id = weeklyReportId(weekEnd, scope, index);
-      built.push(
-        summarizeScoped(
-          "weekly",
-          id,
-          scope,
-          a,
-          b,
-          cases,
-          {
-            id,
-            kind: "weekly",
-            scope,
-            label: `Week ${String(week).padStart(2, "0")} · ${scope}`,
-            status: "Awaiting HSE signature",
-            a,
-            b,
-          },
-        ),
-      );
-    });
-  }
-  return built;
+  return weeklyPackets.filter((p) => !projectNames.length || projectNames.includes(p.scope))
+    .sort((a, b) => b.a.localeCompare(a.a) || a.scope.localeCompare(b.scope))
+    .map((p) => summarizeScoped("weekly", p.id, p.scope, p.a, p.b, cases, p));
 }
 
-function buildMonthlyReports(
+export function buildMonthlyReports(
   packets: ReportPacket[],
   cases: CaseSummary[],
   projectNames: readonly string[],
 ): BuiltReport[] {
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const monthEnd = isoDate(now);
   const monthlyPackets = packets.filter((p) => p.kind === "monthly");
-  const scopes =
-    projectNames.length > 0
-      ? projectNames
-      : ([...new Set(monthlyPackets.map((p) => p.scope).filter(Boolean))] as string[]);
+  return monthlyPackets.filter((p) => !projectNames.length || projectNames.includes(p.scope))
+    .sort((a, b) => b.a.localeCompare(a.a) || a.scope.localeCompare(b.scope))
+    .map((p) => summarizeScoped("monthly", p.id, p.scope, p.a, p.b, cases, p));
+}
 
-  // Prefer saved monthly packets (multiple months × projects), including 0-case months.
-  if (monthlyPackets.length) {
-    const scopedPackets =
-      projectNames.length > 0
-        ? monthlyPackets.filter((p) => !p.scope || scopes.includes(p.scope))
-        : monthlyPackets;
-    return [...scopedPackets]
-      .sort((a, b) => `${b.a}${a.scope}`.localeCompare(`${a.a}${b.scope}`))
-      .map((packet, index) => {
-        const scope = packet.scope || scopes[0] || "All projects";
-        const scopeIndex = Math.max(0, scopes.indexOf(scope));
-        const code = projectCode(scope, scopeIndex >= 0 ? scopeIndex : index);
-        const id =
-          packet.id ||
-          `MR-${String(packet.a || monthStart).slice(0, 4)}-${String(packet.a || monthStart).slice(5, 7)}-${code}`;
-        return summarizeScoped(
-          "monthly",
-          id,
-          scope,
-          packet.a || monthStart,
-          packet.b || monthEnd,
-          cases,
-          { ...packet, id },
-        );
-      });
-  }
-
-  return scopes.map((scope, index) => {
-    const code = projectCode(scope, index);
-    const id = `MR-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${code}`;
-    return summarizeScoped(
-      "monthly",
-      id,
-      scope,
-      monthStart,
-      monthEnd,
-      cases,
-      {
-        id,
-        kind: "monthly",
-        scope,
-        label: `${MONTH_FULL[now.getMonth()]} ${now.getFullYear()}`,
-        status: "Compiling",
-        a: monthStart,
-        b: monthEnd,
-      },
-    );
-  });
+export function generatedReportCount(reports: BuiltReport[]): number {
+  return reports.filter((r) => r.status !== "No source data" && !r.compiling &&
+    Boolean(r.packet?.generated_at || r.packet?.signed || r.packet?.pm_signed || r.packet?.issued)).length;
 }
 
 function typeStats(cases: CaseSummary[]) {
@@ -994,6 +833,7 @@ function ReportViewer({
 
   const canSignWeekly =
     signMode &&
+    /awaiting/i.test(report.status) &&
     report.kind === "weekly" &&
     !report.packet?.signed &&
     user?.role === "dept_hse" &&
@@ -1772,12 +1612,12 @@ export function ReportsScreen({
   const projectAccess = useProjectAccess(catalogProjects);
   const projectNames = useMemo(() => {
     if (projectAccess.isProjectScoped) return projectAccess.accessProjects;
-    return catalogProjects.slice(0, 4);
+    return catalogProjects;
   }, [projectAccess.isProjectScoped, projectAccess.accessProjects, catalogProjects]);
 
   const daily = useMemo(
-    () => buildDailyReports(cases, packets, new Date(), schedule.dailyAt),
-    [cases, packets, schedule.dailyAt],
+    () => buildDailyReports(cases, packets),
+    [cases, packets],
   );
   const weekly = useMemo(
     () => buildWeeklyReports(packets, cases, projectNames),
@@ -1933,9 +1773,9 @@ export function ReportsScreen({
       <div className="reports-tabs" role="tablist" aria-label="Report period">
         {(
           [
-            ["daily", "Daily reports", daily.length],
-            ["weekly", "Weekly reports", weekly.length],
-            ["monthly", "Monthly reports", monthly.length],
+            ["daily", "Daily reports", generatedReportCount(daily)],
+            ["weekly", "Weekly reports", generatedReportCount(weekly)],
+            ["monthly", "Monthly reports", generatedReportCount(monthly)],
           ] as const
         ).map(([id, label, count]) => (
           <button
@@ -1950,6 +1790,11 @@ export function ReportsScreen({
           </button>
         ))}
       </div>
+      <p className="state">
+        Counts show generated reports, including signed or historically issued reports.
+        {" "}{data?.report_counts?.stored_packets ?? packets.length} saved periods.
+        {" "}Scheduled/compiling periods and periods without source data are not completed reports.
+      </p>
 
       <article className="v1-card table-panel review-table-card">
         {!rows.length ? (

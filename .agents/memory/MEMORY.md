@@ -1,0 +1,1 @@
+- [Company-data protection](company-data-protection.md) — Key Personnel and Contacts are valid company information; preserve them during operational-data cleanup.

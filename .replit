@@ -2,7 +2,7 @@
 # Single Uvicorn process serves FastAPI + Vite FRONTEND_DIST. No Vite dev server.
 
 run = "bash scripts/replit_start.sh"
-modules = ["nodejs-20", "postgresql-16", "python-3.12"]
+modules = ["nodejs-20", "python-3.12", "postgresql-16"]
 
 [nix]
 channel = "stable-24_05"

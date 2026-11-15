@@ -6,7 +6,8 @@ export type HwStatus =
   | "In Stock"
   | "Under Maintenance"
   | "Damaged"
-  | "Lost";
+  | "Lost"
+  | "Unknown";
 
 export type HwSystem = "4S" | "FMS" | "PWAS";
 
@@ -129,6 +130,7 @@ const STATUS_SHARE: Record<HwStatus, number> = {
   "Under Maintenance": 0.0265,
   Damaged: 0.017,
   Lost: 0.008,
+  Unknown: 0,
 };
 
 export const HW_STATUS_COLORS: Record<HwStatus, string> = {
@@ -138,6 +140,7 @@ export const HW_STATUS_COLORS: Record<HwStatus, string> = {
   "Under Maintenance": "#E9A23B",
   Damaged: "#C8102E",
   Lost: "#2a2a2a",
+  Unknown: "#a9a6a3",
 };
 
 export const HW_STATUSES = Object.keys(HW_STATUS_COLORS) as HwStatus[];
@@ -154,8 +157,7 @@ export function isHwWearableDevice(device: string): boolean {
 
 /** Status choices for add/change: wearables get all; other devices exclude Assigned. */
 export function hwStatusesForDevice(device: string): HwStatus[] {
-  if (isHwWearableDevice(device)) return [...HW_STATUSES];
-  return HW_STATUSES.filter((s) => s !== "Assigned");
+  return HW_STATUSES.filter((s) => s !== "Unknown" && (isHwWearableDevice(device) || s !== "Assigned"));
 }
 
 export function coerceHwStatusForDevice(device: string, status: string): HwStatus {
@@ -242,6 +244,7 @@ function emptyStatusCounts(): Record<HwStatus, number> {
     "Under Maintenance": 0,
     Damaged: 0,
     Lost: 0,
+    Unknown: 0,
   };
 }
 
@@ -525,35 +528,29 @@ export function damagedLostByProject(projects: string[]) {
 
 export function mergeTransfers(
   apiItems: Array<Record<string, unknown>>,
-  now = new Date(),
 ): HwTransfer[] {
-  const seeded = defaultTransfers(now);
-  if (!apiItems.length) return seeded;
-  const fromApi = apiItems.map((raw, i) => {
-    const id = String(raw.id || `TRF-${pad(i + 1, 4)}`);
-    const seed = seeded.find((t) => t.id === id);
-    const status = String(raw.status || seed?.status || "transit") === "received" ? "received" : "transit";
+  return apiItems.map((raw) => {
+    const id = String(raw.id || "");
+    const status = String(raw.status || "transit") === "received" ? "received" : "transit";
     return {
       id,
-      atIso: String(raw.at || raw.created_at || seed?.atIso || now.toISOString()),
-      kind: (raw.kind as "delivery" | "shift") || seed?.kind || "delivery",
-      from: String(raw.from || seed?.from || "Warehouse"),
-      to: String(raw.to || seed?.to || "Jafurah"),
-      type: String(raw.type || seed?.type || "AI Camera"),
-      qty: Number(raw.qty ?? seed?.qty ?? 1),
+      atIso: String(raw.atIso || raw.at || raw.created_at || ""),
+      kind: (raw.kind as "delivery" | "shift") || "delivery",
+      from: String(raw.from || ""),
+      to: String(raw.to || ""),
+      type: String(raw.type || ""),
+      qty: Number(raw.qty ?? 0),
       serials: Array.isArray(raw.serials)
         ? (raw.serials as string[])
-        : seed?.serials || [],
-      reason: String(raw.reason || seed?.reason || "Material movement"),
-      sender: String(raw.sender || seed?.sender || "Warehouse Keeper"),
-      receiver: String(raw.recv || raw.receiver || seed?.receiver || "Site Receiver"),
+        : [],
+      reason: String(raw.reason || ""),
+      sender: String(raw.sender || ""),
+      receiver: String(raw.recv || raw.receiver || ""),
       status,
       receivedAtIso:
         status === "received"
-          ? String(raw.received_at || seed?.receivedAtIso || now.toISOString())
+          ? String(raw.receivedAtIso || raw.received_at || "")
           : undefined,
     } satisfies HwTransfer;
   });
-  const seen = new Set(fromApi.map((t) => t.id));
-  return [...fromApi, ...seeded.filter((t) => !seen.has(t.id))];
 }

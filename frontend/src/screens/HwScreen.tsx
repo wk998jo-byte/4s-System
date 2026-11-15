@@ -10,12 +10,14 @@ import {
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 import {
   createHwRegisterItem,
+  createHwTransfer,
   downloadHwRegisterTemplate,
   fetchHw,
   fetchHwRegister,
   fetchHwTransfers,
   importHwRegister,
   receiveHwTransfer,
+  updateHwRegisterStatus,
   type HwPayload,
   type HwRegisterItem,
 } from "../api/scc";
@@ -24,26 +26,20 @@ import { errorMessage } from "../lib/errors";
 import { DashboardScreen } from "./DashboardScreen";
 import { formatUserLabel, ProjectOnlyViewSeg, useList } from "./shared";
 import { useChartReveal } from "../lib/useChartReveal";
+import { inventoryMetrics } from "../lib/hwMetrics";
 import {
-  buildDeviceRegister,
-  damagedLostByProject,
-  defaultChangeHistory,
   fmtHwDate,
   fmtHwDateTime,
   fmtN,
-  healthByType,
   AI_CAMERA_LOCATIONS,
   coerceHwStatusForDevice,
   HW_DEVICE_META,
   HW_PROJECTS,
   HW_STATUS_COLORS,
   hwStatusesForDevice,
-  hwTotalDevices,
-  installedTrend,
   isAiCameraLocation,
   mergeTransfers,
-  projectDeviceMatrix,
-  statusByProject,
+  type HwChange,
   type HwDevice,
   type HwDeviceType,
   type HwStatus,
@@ -446,6 +442,7 @@ function TrendLine({ labels, values }: { labels: string[]; values: number[] }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
   const reveal = useChartReveal(hostRef, values.join(","));
+  if (!values.length) return <div ref={hostRef}><p className="state">No saved installation history.</p></div>;
   const w = 420;
   const h = 180;
   const padL = 36;
@@ -582,7 +579,7 @@ export function HwScreen() {
   const [error, setError] = useState<string | null>(null);
   const [register, setRegister] = useState<HwDevice[]>([]);
   const [transfers, setTransfers] = useState<HwTransfer[]>([]);
-  const [history] = useState(() => defaultChangeHistory(now));
+  const [history] = useState<HwChange[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [receiveId, setReceiveId] = useState<string | null>(null);
@@ -591,6 +588,8 @@ export function HwScreen() {
   const [receiveNotes, setReceiveNotes] = useState("");
   const [receiveAck, setReceiveAck] = useState(false);
   const [statusEditId, setStatusEditId] = useState<string | null>(null);
+  const [statusDraft, setStatusDraft] = useState<HwStatus>("In Stock");
+  const [savingStatus, setSavingStatus] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -621,8 +620,7 @@ export function HwScreen() {
   const accessProjects = useMemo((): string[] => {
     if (hasAllProjectAccess) return [...HW_PROJECTS];
     const allowed = new Set((user?.projects || []).map(String));
-    const matched = HW_PROJECTS.filter((p) => allowed.has(p));
-    return matched.length ? matched : [...HW_PROJECTS];
+    return HW_PROJECTS.filter((p) => allowed.has(p));
   }, [hasAllProjectAccess, user?.projects]);
 
   useEffect(() => {
@@ -645,18 +643,15 @@ export function HwScreen() {
       .then(([hwData, tr, reg]) => {
         if (cancelled) return;
         setHw(hwData);
-        setTransfers(mergeTransfers(tr.items || [], now));
-        if (reg.items?.length) {
-          setRegister(asHwDevices(reg.items, now));
-        } else {
-          setRegister(buildDeviceRegister(accessProjects, 60, now));
-        }
+        setTransfers(mergeTransfers(tr.items || []));
+        setRegister(asHwDevices(reg.items || [], now));
       })
       .catch((err) => {
         if (!cancelled) {
           setError(errorMessage(err));
-          setTransfers(mergeTransfers([], now));
-          setRegister(buildDeviceRegister(accessProjects, 60, now));
+          setHw(null);
+          setTransfers([]);
+          setRegister([]);
         }
       });
     return () => {
@@ -716,10 +711,11 @@ export function HwScreen() {
     const fromDb = Object.keys(hw?.project_counts || {});
     const ordered = [
       ...scopedProjects,
-      ...fromDb.filter((site) => !scopedProjects.includes(site)),
+      ...fromDb.filter((site) => !scopedProjects.includes(site) &&
+        hasAllProjectAccess && !(view === "projects" && projectFilter)),
     ];
     return ordered;
-  }, [hw?.project_counts, scopedProjects]);
+  }, [hw?.project_counts, scopedProjects, hasAllProjectAccess, view, projectFilter]);
 
   /** Summary / type banners: every project site + every department. */
   const summarySites = useMemo(() => {
@@ -787,26 +783,6 @@ export function HwScreen() {
         fill(site.key, site.label, "department", fromDepts[site.label]);
       }
     }
-    const dbTotal =
-      Object.values(fromProjects).reduce(
-        (sum, site) => sum + Object.values(site).reduce((a, n) => a + (Number(n) || 0), 0),
-        0,
-      ) +
-      Object.values(fromDepts).reduce(
-        (sum, site) => sum + Object.values(site).reduce((a, n) => a + (Number(n) || 0), 0),
-        0,
-      );
-    if (dbTotal > 0) return out;
-    // Fallback seed: projects only when DB is empty.
-    const seeded = projectDeviceMatrix(scopedProjects);
-    for (const project of scopedProjects) {
-      out[project] = {};
-      for (const meta of HW_DEVICE_META) {
-        let n = Number(seeded[project]?.[meta.device] || 0);
-        if (meta.device === "AI Camera" && !isAiCameraLocation(project)) n = 0;
-        out[project][meta.device] = n;
-      }
-    }
     return out;
   }, [hw, summarySites, scopedProjects]);
 
@@ -821,19 +797,18 @@ export function HwScreen() {
     return out;
   }, [matrix, summarySites]);
 
-  const byStatus = useMemo(() => statusByProject(scopedProjects), [scopedProjects]);
-  const health = useMemo(() => healthByType(scopedProjects), [scopedProjects]);
+  const metrics = useMemo(() => inventoryMetrics(matrix, register), [matrix, register]);
+  const { byStatus, health, attention } = metrics;
 
   const totals = useMemo(() => {
-    const all =
-      Object.values(typeTotals).reduce((s, n) => s + n, 0) || hwTotalDevices();
-    // Sample totals: Assigned only from wearables (same rule as health-by-type).
+    const all = Object.values(typeTotals).reduce((s, n) => s + n, 0);
     const installed = health.reduce((s, row) => s + row.installed, 0);
     const assigned = health.reduce((s, row) => s + row.assigned, 0);
     const inStock = health.reduce((s, row) => s + row.inStock, 0);
     const maint = health.reduce((s, row) => s + row.maint, 0);
     const damaged = health.reduce((s, row) => s + row.damaged, 0);
     const lost = health.reduce((s, row) => s + row.lost, 0);
+    const unknown = health.reduce((s, row) => s + row.unknown, 0);
     return {
       all,
       installed,
@@ -842,14 +817,17 @@ export function HwScreen() {
       maint,
       damaged,
       lost,
+      unknown,
       out: maint + damaged + lost,
     };
   }, [typeTotals, health]);
-  const attention = useMemo(() => damagedLostByProject(scopedProjects), [scopedProjects]);
-  const trend = useMemo(() => installedTrend(now), [now]);
+  // Current register status is not a historical installation event series.
+  const trend = { labels: [] as string[], values: [] as number[] };
   const liveLabel = useMemo(() => {
     const t = hw?.last_updated_at ? new Date(hw.last_updated_at) : now;
-    return `Live · updated ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    return hw?.last_updated_at
+      ? `Saved · updated ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`
+      : hw ? "No inventory updates saved" : "Inventory unavailable";
   }, [hw, now]);
 
   const rangeLabel = useMemo(() => {
@@ -878,8 +856,7 @@ export function HwScreen() {
       transfers.filter(
         (t) =>
           scopedProjects.includes(t.to) ||
-          scopedProjects.includes(t.from) ||
-          t.from === "Warehouse",
+          scopedProjects.includes(t.from),
       ),
     [transfers, scopedProjects],
   );
@@ -893,7 +870,7 @@ export function HwScreen() {
 
   const statusEdit = register.find((r) => r.id === statusEditId) || null;
   const receiveTransfer = transfers.find((t) => t.id === receiveId) || null;
-  const canConfirmReceipt = canReceive || canWrite || user?.role === "admin";
+  const canConfirmReceipt = canReceive;
 
   function toast(msg: string) {
     setFlash(msg);
@@ -1032,7 +1009,7 @@ export function HwScreen() {
     }
   }
 
-  function onSendTransfer() {
+  async function onSendTransfer() {
     const qty = Number(trForm.qty) || 0;
     const serials = trForm.serials
       .split(/\n+/)
@@ -1048,9 +1025,7 @@ export function HwScreen() {
       );
       return;
     }
-    const id = `TRF-${String(transfers.length + 8).padStart(4, "0")}`;
-    const next: HwTransfer = {
-      id,
+    const next = {
       atIso: now.toISOString(),
       kind: trForm.kind.includes("warehouse") ? "delivery" : "shift",
       from: trForm.from,
@@ -1063,11 +1038,16 @@ export function HwScreen() {
       receiver: trForm.receiver || "Site Receiver",
       status: "transit",
     };
-    setTransfers((rows) => [next, ...rows]);
-    setTransferOpen(false);
-    setError(null);
-    setTab("transfers");
-    toast(`Transfer ${id} sent`);
+    try {
+      const saved = await createHwTransfer(next);
+      setTransfers(mergeTransfers(saved.items));
+      setTransferOpen(false);
+      setError(null);
+      setTab("transfers");
+      toast(`Transfer ${saved.item.id} saved`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   function openReceive(id: string) {
@@ -1099,25 +1079,14 @@ export function HwScreen() {
     const id = receiveTransfer.id;
     try {
       await receiveHwTransfer(id);
-    } catch {
-      /* local confirm still applies for demo seed rows */
+      const [tr, currentHw] = await Promise.all([fetchHwTransfers(), fetchHw()]);
+      setTransfers(mergeTransfers(tr.items));
+      setHw(currentHw);
+      closeReceive();
+      toast(`Confirmed ${id}`);
+    } catch (err) {
+      setError(errorMessage(err));
     }
-    const receivedAtIso = new Date().toISOString();
-    setTransfers((rows) =>
-      rows.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              status: "received",
-              receivedAtIso,
-              serials: receiveSerials,
-              receiver: formatUserLabel(user) || user?.username || t.receiver,
-            }
-          : t,
-      ),
-    );
-    closeReceive();
-    toast(`Confirmed ${id}`);
   }
 
   const donutParts = (Object.keys(HW_STATUS_COLORS) as HwStatus[]).map((st) => ({
@@ -1133,7 +1102,7 @@ export function HwScreen() {
               ? totals.maint
               : st === "Damaged"
                 ? totals.damaged
-                : totals.lost,
+                : st === "Lost" ? totals.lost : totals.unknown,
     color: HW_STATUS_COLORS[st],
   }));
 
@@ -1262,7 +1231,7 @@ export function HwScreen() {
         </div>
         <div className="range">
           <b>{rangeLabel}</b>
-          Counts follow the Device Register
+          Quantities follow saved inventory; statuses follow saved register entries
           {!hasAllProjectAccess ? ` · ${accessProjects.join(", ")}` : ""}
         </div>
       </div>
@@ -1270,6 +1239,8 @@ export function HwScreen() {
 
       {flash ? <p className="hw-flash">{flash}</p> : null}
       {error ? <p className="state error">{error}</p> : null}
+      {totals.unknown > 0 ? <p className="state">{fmtN(totals.unknown)} inventory units have no saved device status and are shown as Unknown.</p> : null}
+      {metrics.unmatchedRegister > 0 ? <p className="state error">Some register entries exceed saved inventory. Status counts are limited to inventory quantities.</p> : null}
 
       {tab === "dash" ? (
         <>
@@ -1282,17 +1253,17 @@ export function HwScreen() {
             <article className="v1-kpi">
               <p>Installed</p>
               <strong>{fmtN(totals.installed)}</strong>
-              <span>{Math.round((totals.installed / totals.all) * 100)}% · cameras, vehicles and site devices</span>
+              <span>{totals.all ? Math.round((totals.installed / totals.all) * 100) : 0}% · cameras, vehicles and site devices</span>
               <div className="progress">
-                <i style={{ width: `${(totals.installed / totals.all) * 100}%`, background: "#2f9e5b" }} />
+                <i style={{ width: `${totals.all ? (totals.installed / totals.all) * 100 : 0}%`, background: "#2f9e5b" }} />
               </div>
             </article>
             <article className="v1-kpi">
               <p>Assigned</p>
               <strong>{fmtN(totals.assigned)}</strong>
-              <span>{Math.round((totals.assigned / totals.all) * 100)}% · smart watches and helmets</span>
+              <span>{totals.all ? Math.round((totals.assigned / totals.all) * 100) : 0}% · smart watches and helmets</span>
               <div className="progress">
-                <i style={{ width: `${(totals.assigned / totals.all) * 100}%`, background: "#2a8f8a" }} />
+                <i style={{ width: `${totals.all ? (totals.assigned / totals.all) * 100 : 0}%`, background: "#2a8f8a" }} />
               </div>
             </article>
             <article className="v1-kpi">
@@ -1317,7 +1288,7 @@ export function HwScreen() {
             </article>
             <article className="v1-card">
               <h3>Devices by project</h3>
-              <StackedProjectBars projects={scopedProjects} byStatus={byStatus} />
+              <StackedProjectBars projects={summarySites.map((s) => s.key)} byStatus={byStatus} />
             </article>
           </div>
 
@@ -1338,6 +1309,7 @@ export function HwScreen() {
                       <th className="n">Maint.</th>
                       <th className="n">Damaged</th>
                       <th className="n">Lost</th>
+                      <th className="n">Unknown</th>
                       <th>In Service</th>
                     </tr>
                   </thead>
@@ -1355,6 +1327,7 @@ export function HwScreen() {
                           {fmtN(row.damaged)}
                         </td>
                         <td className={`n mono${row.lost ? " hw-danger" : ""}`}>{fmtN(row.lost)}</td>
+                        <td className="n mono">{fmtN(row.unknown)}</td>
                         <td>
                           <div className="hw-svc">
                             <div className="hw-mini-bar">
@@ -1499,7 +1472,7 @@ export function HwScreen() {
                         </td>
                         {HW_DEVICE_META.map((d) => {
                           const n = matrix[site.key]?.[d.device] || 0;
-                          const heat = n <= 0 ? 0 : Math.min(1, 0.18 + n / Math.max(d.total * 0.55, 1));
+                          const heat = n <= 0 ? 0 : Math.min(1, 0.18 + n / Math.max((typeTotals[d.device] || 0) * 0.55, 1));
                           return (
                             <td key={d.device} className="n mono">
                               <button
@@ -1607,17 +1580,15 @@ export function HwScreen() {
                           <button
                             type="button"
                             className="linkbtn"
-                            onClick={() => setStatusEditId(row.id)}
+                            onClick={() => { setStatusDraft(row.status); setStatusEditId(row.id); }}
                           >
                             Change status
                           </button>
                           <button
                             type="button"
                             className="linkbtn muted"
-                            onClick={() => {
-                              setRegister((rows) => rows.filter((r) => r.id !== row.id));
-                              toast(`Removed ${row.serial}`);
-                            }}
+                            disabled
+                            title="Device removal is not supported by the saved inventory API."
                           >
                             Remove
                           </button>
@@ -1640,8 +1611,8 @@ export function HwScreen() {
             <div>
               <h3>Material transfers</h3>
               <p className="sub">
-                Deliveries from the warehouse and shifts between projects. Counts move automatically
-                when the receiver confirms receipt.
+                Saved deliveries from the warehouse and shifts between projects.
+                Receipt status is saved when the receiver confirms receipt.
               </p>
             </div>
             {canWrite ? (
@@ -2089,9 +2060,20 @@ export function HwScreen() {
               <button
                 type="button"
                 className="btn primary"
-                onClick={() => {
-                  setStatusEditId(null);
-                  toast("Status updated");
+                disabled={savingStatus}
+                onClick={async () => {
+                  setSavingStatus(true);
+                  try {
+                    const saved = await updateHwRegisterStatus(statusEdit.id, statusDraft);
+                    setRegister(asHwDevices(saved.items, now));
+                    setStatusEditId(null);
+                    setError(null);
+                    toast("Status saved");
+                  } catch (err) {
+                    setError(errorMessage(err));
+                  } finally {
+                    setSavingStatus(false);
+                  }
                 }}
               >
                 Save
@@ -2102,19 +2084,13 @@ export function HwScreen() {
           <label className="hw-field">
             Status
             <select
-              value={coerceHwStatusForDevice(statusEdit.device, statusEdit.status)}
+              value={statusDraft}
               onChange={(e) => {
                 const status = coerceHwStatusForDevice(
                   statusEdit.device,
                   e.target.value,
                 );
-                setRegister((rows) =>
-                  rows.map((r) =>
-                    r.id === statusEdit.id
-                      ? { ...r, status, updatedIso: new Date().toISOString() }
-                      : r,
-                  ),
-                );
+                setStatusDraft(status);
               }}
             >
               {hwStatusesForDevice(statusEdit.device).map((s) => (

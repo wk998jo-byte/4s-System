@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SCC Platform — Data Accuracy Review</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;color:#172332;background:#eef1f5;margin:0}main{max-width:1000px;margin:32px auto;padding:40px;background:white;border-radius:12px}h1,h2,h3{line-height:1.25}h1{font-size:30px}h2{margin-top:36px;font-size:23px}h3{font-size:18px}p,li{max-width:92ch}code{font:13px/1.5 ui-monospace,monospace;background:#eef1f5;padding:2px 5px;border-radius:3px;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%;font-size:14px;margin:20px 0}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #dce2e9}th{background:#f2f5f8}.notice{padding:16px 20px;background:#fff4dc;border-left:4px solid #b37400}.good{padding:16px 20px;background:#edf8f1;border-left:4px solid #24814a}.muted{color:#526274}ul{padding-left:23px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f8;padding:16px;border-radius:6px;font-size:12px}@media(max-width:650px){main{margin:0;padding:22px;border-radius:0}table{font-size:12px}th,td{padding:8px}}@media print{body{background:white}main{margin:0;padding:0;max-width:none}.notice,.good,table{break-inside:avoid}}
+</style>
+</head>
+<body><main>
+<h1>SCC Platform — Data Accuracy Review</h1>
+<p class="muted">Investigation and workspace fixes · 15 November 2026</p>
+<div class="notice"><strong>Not published.</strong> The corrections are in the workspace for owner review. No production writes, resets, migrations, publishing, republishing, or Git pushes were performed.</div>
+
+<h2>1. Production facts checked read-only</h2>
+<p>Production was inspected through SELECT-only database access. Public HTML and JavaScript were fetched without signing in or calling operational API endpoints.</p>
+<table>
+<thead><tr><th>Source</th><th>Observed</th></tr></thead>
+<tbody>
+<tr><td>Active cases</td><td>0. Three stored cases are soft-deleted, not active operational records.</td></tr>
+<tr><td>Hourly weather readings / weekly weather logs</td><td>0 / 0</td></tr>
+<tr><td>Project / department inventory quantities</td><td>0 / 0</td></tr>
+<tr><td>Device register / transfer items / transfer register</td><td>0 / 0 / 0</td></tr>
+<tr><td>Persisted report packets</td><td>78: 30 daily, 24 weekly, 24 monthly. No HSE or PM signatures.</td></tr>
+</tbody></table>
+<p>The saved report count has changed since the supplied zero-packet snapshot. It exactly matches the application's automatic calendar generation: 30 days, plus six weeks × four projects, plus six months × four projects. The live JavaScript bundle also contains the sample hardware quantities, sample transfer identifiers, and fixed 30-day report window.</p>
+
+<h2>2. Root causes and corrections</h2>
+<h3>Hardware KPI, summary, status charts, and device register</h3>
+<p><code>HwScreen</code> fetched the correct zero inventory from <code>GET /api/v1/hw</code>, but replaced an empty inventory matrix with <code>projectDeviceMatrix</code> sample quantities. Its grand total also used <code>actualTotal || hwTotalDevices()</code>, treating a valid zero as missing data. Status and health calculations used fixed sample proportions regardless of the database, and an empty register was replaced with synthetic device rows.</p>
+<p><strong>Fix:</strong> summary quantities now come only from persisted inventory. Status calculations use persisted register entries and cannot exceed the corresponding inventory quantity. Units without saved status evidence are explicitly <strong>Unknown</strong>, not silently assigned Installed, Assigned, In Stock, or Lost. Empty inventory produces zero quantities and zero percentages. Project and department filters use the same matrix. All existing device categories and project choices remain.</p>
+<p>Wearables had a separate fallback that injected helmet/watch deployments even when inventory was zero. That fallback has also been removed. Sample installation trends and sample change-history entries are no longer displayed as operational history.</p>
+
+<h3>Material Transfers</h3>
+<p><code>mergeTransfers</code> returned sample transfers for an empty response and merged additional sample rows into nonempty API results. Two of the sample rows were in transit, explaining the displayed counter of 2. Missing metadata could also be copied from sample transfers with matching IDs.</p>
+<p><strong>Fix:</strong> only saved API transfer rows are displayed. Empty means zero. Transfer creation previously updated browser state only; it now saves through a capability-checked API before entering the list. Receipt errors are no longer swallowed or presented as successful local confirmations. Receipt permission remains Project PM/receiver, as defined by the existing backend. Device status changes now also save through the API rather than modifying browser-only state.</p>
+<p>The existing register Remove button had no saved-delete implementation. It is disabled rather than falsely reporting a deletion; no delete operation was added.</p>
+
+<h3>Daily, weekly, and monthly reports</h3>
+<p><code>GET /api/v1/reports</code> called <code>_report_packets()</code>, which rebuilt and saved the recent calendar windows even with zero cases and zero weather readings. Historical empty periods became Generated or Awaiting signature. Frontend builders independently created calendar rows when packets were absent, then counted array lengths as report totals.</p>
+<p><strong>Fix:</strong> calendar windows are now candidates, not completed reports. New packets require real active case data, actual weather measurements, or applicable submitted weekly weather data. Weekly weather aggregates do not invent daily readings. The configured generation cutoffs and HSE/PM signature paths remain functional.</p>
+<ul>
+<li>The frontend displays API packets only; it never generates missing periods locally.</li>
+<li>Existing unsigned packets with no source data remain saved and visible as <strong>No source data</strong>, not completed reports.</li>
+<li>Scheduled/Compiling periods are excluded from generated-report badges.</li>
+<li>Generated badges include persisted generated, signed, or historically issued reports; a separate saved-period total makes retention explicit.</li>
+<li>Saved history outside the recent window, signatures, and historical issue evidence are retained.</li>
+<li>Empty periods do not trigger compile notifications or allow signing before generation.</li>
+<li>All catalog projects can participate; reporting is no longer arbitrarily limited to the first four.</li>
+</ul>
+
+<h3>Caching, startup, and data sources</h3>
+<p>No operational hardware/report cache was found in localStorage; its relevant usage is authentication and theme preferences. The mismatches came from rendering fallbacks, browser-only mutations, and request-driven report persistence—not a single stale cache.</p>
+<p>The production database resolver requires PostgreSQL and refuses SQLite fallback. Isolated tests use disposable SQLite databases instead. Startup demo seed code is controlled separately from operational case seeding; production defaults disable these fixtures. No seed settings or company/personnel seed code were changed, and no real database was started from the workspace.</p>
+
+<h2>3. Before / after behavior</h2>
+<p>“After” describes the workspace fixes and isolated verification, not the currently published version.</p>
+<table>
+<thead><tr><th>View</th><th>Before with empty sources</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>Hardware KPI and summary</td><td>4,720 sample devices reported by the owner; zero treated as a fallback trigger</td><td>0 devices; project, department, and type totals reconcile</td></tr>
+<tr><td>Status / health charts</td><td>Invented fixed status proportions</td><td>Saved register statuses only; unmatched inventory is Unknown</td></tr>
+<tr><td>Register and wearables</td><td>Synthetic rows / deployment quantities could appear</td><td>No rows or deployment quantities invented</td></tr>
+<tr><td>Transfers</td><td>2 in-transit samples; local-only creation/receipt claims</td><td>0 when no saved transfers; saves and errors are explicit</td></tr>
+<tr><td>Daily / weekly / monthly badges</td><td>30 / 24 / 24 calendar rows counted as reports</td><td>0 completed reports when sources are empty and no approval evidence exists</td></tr>
+<tr><td>Existing 78 empty packets</td><td>Most shown as Generated or Awaiting signatures</td><td>Retained, labelled No source data, excluded from completed counts</td></tr>
+<tr><td>Truly new empty database</td><td>Reading reports saved 78 calendar packets</td><td>No packets created; zero report totals</td></tr>
+</tbody></table>
+
+<h2>4. Files changed</h2>
+<table>
+<thead><tr><th>File</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>backend/app/services/platform_store.py</code></td><td>Source-backed packet eligibility, retained history, explicit report counts, no empty transfer-state write on read, saved transfer creation and register status updates</td></tr>
+<tr><td><code>backend/app/api/v1/scc.py</code></td><td>Capability-checked transfer creation and register status endpoints, with audit events</td></tr>
+<tr><td><code>frontend/src/api/scc.ts</code></td><td>API calls and report-count response types</td></tr>
+<tr><td><code>frontend/src/lib/hwData.ts</code></td><td>API-only transfer mapping and Unknown status metadata</td></tr>
+<tr><td><code>frontend/src/lib/hwMetrics.ts</code></td><td>Inventory-authoritative status/health calculations</td></tr>
+<tr><td><code>frontend/src/screens/HwScreen.tsx</code></td><td>Remove live sample fallbacks; use saved quantities, statuses, and transfers</td></tr>
+<tr><td><code>frontend/src/screens/WearablesScreen.tsx</code></td><td>Remove invented wearable deployments</td></tr>
+<tr><td><code>frontend/src/screens/ReportsScreen.tsx</code></td><td>Packet-only lists and distinct generated/scheduled/no-source/signed/issued presentation</td></tr>
+<tr><td><code>backend/tests/test_data_accuracy.py</code></td><td>Isolated empty-state, schedule, signing, persistence, permissions, notifications, and company-data protection regressions</td></tr>
+<tr><td><code>frontend/src/lib/hwMetrics.test.ts</code><br><code>frontend/src/screens/ReportsScreen.test.ts</code></td><td>Frontend calculation and report-builder regressions</td></tr>
+</tbody></table>
+<p>This report and a small project-memory note record the owner's company-data protection decision. Existing branch and unrelated workspace changes were preserved.</p>
+
+<h2>5. Verification</h2>
+<div class="good"><strong>Passed:</strong> full backend suite (88 tests), frontend suite (20 tests), TypeScript check and Vite production build, and whitespace/error checks. After the final weekly-weather source distinction, the affected accuracy/production-isolation suites passed again (21 tests, including the added regression).</div>
+<ul>
+<li>Authenticated API tests verify empty hardware, register, transfers, reports, and dashboard KPIs; transfer/status permissions and persistence are exercised.</li>
+<li>Tests cover actual case-backed generation, weather-only generation including zero-valued measurements, exclusion of missing weather stubs, daily cutoff, weekly HSE signing, monthly dual signatures, and scoped reports.</li>
+<li>Tests retain all 78 legacy empty packets without counting them as completed, preserve signed/issued archive packets, and verify no empty-period compile notifications.</li>
+<li>Protected-company-data snapshots remain unchanged across report/hardware reads. Existing SOS Operator direct-close regressions pass.</li>
+<li>A disposable, fixtures-disabled local preview started cleanly. The sign-in screen rendered without browser errors. No authentication bypass was added.</li>
+<li>The signed-in UI was not visually verified. Authenticated API behavior and the frontend calculation/build paths were verified separately.</li>
+<li>Non-blocking warnings remain: the existing Starlette/AnyIO deprecation, mixed static/dynamic imports, and the large JavaScript bundle.</li>
+</ul>
+<p>Test invocations used an in-memory/disposable database and process-local development settings, with production bootstrap credentials and SMTP disabled. Existing workspace seed overrides were unset for tests of default configuration behavior; workspace secrets were not changed.</p>
+
+<h2>6. Remaining limits and production safety</h2>
+<ul>
+<li><strong>The live app is unchanged.</strong> It will keep its old behavior until a separately approved publish. No publish was attempted or suggested as an action.</li>
+<li>The 78 production packets were not removed or updated during this investigation. With the corrected code in use, unsigned source-less packets are classified as No source data; saved evidence remains retained.</li>
+<li>Report compilation remains request-driven. A real source-backed period can still be compiled/persisted and notify its existing recipients when reports are read; no production report read was used for verification.</li>
+<li>Historical installation-event data and detailed hardware change history are not wired to a persisted history feed. Empty history is shown instead of sample claims.</li>
+<li>Transfer receipt retains its existing status-recording behavior; this work does not introduce a stock-movement reconciliation engine.</li>
+<li>Read-modify-write JSON state uses the project's existing per-process locking pattern. Cross-instance concurrent edit handling was not redesigned.</li>
+<li>Production SQL was SELECT-only. No DELETE, TRUNCATE, DROP, UPDATE, reset, migration, account/credential change, company contact/personnel change, or approval-permission change was executed. SOS remains Operator direct-close without Admin approval.</li>
+</ul>
+<p><strong>Stopped for owner review. Do not publish without approval.</strong></p>
+</main></body></html>

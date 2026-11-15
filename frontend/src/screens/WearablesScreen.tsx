@@ -94,15 +94,6 @@ const HW_TO_DASH: Record<string, "Smart Helmet" | "Smartwatch"> = {
   Smartwatches: "Smartwatch",
 };
 
-/** V1 wearable deployments — used when HW only has the combined "SOS Devices" bucket. */
-const WEARABLE_DEPLOY: Record<string, { helmet: number; watch: number }> = {
-  Jafurah: { helmet: 1348, watch: 0 },
-  Yanbu: { helmet: 0, watch: 423 },
-  MGS: { helmet: 0, watch: 35 },
-  "Ras Tanura": { helmet: 0, watch: 44 },
-  Dhahran: { helmet: 0, watch: 0 },
-};
-
 function fmtN(n: number) {
   return Number(n || 0).toLocaleString("en-US");
 }
@@ -329,39 +320,24 @@ function slaState(row: CaseSummary, now = Date.now()): SlaState {
   return { k: "ok", left: h - age };
 }
 
-function deviceRowsFromHw(hw: HwPayload | null): Array<[string, { helmet: number; watch: number }]> {
+export function deviceRowsFromHw(hw: HwPayload | null): Array<[string, { helmet: number; watch: number }]> {
   const sites = new Set<string>([
     ...Object.keys(hw?.project_counts || {}),
-    ...Object.keys(WEARABLE_DEPLOY),
   ]);
   return [...sites]
     .map((site) => {
       const counts = hw?.project_counts?.[site] || {};
       let helmet = 0;
       let watch = 0;
-      let hasExplicitHelmet = false;
-      let hasExplicitWatch = false;
       for (const [hwType, n] of Object.entries(counts)) {
         const mapped = HW_TO_DASH[hwType];
         const val = Number(n) || 0;
         if (mapped === "Smart Helmet") {
           helmet += val;
-          if (hwType !== "SOS Devices") hasExplicitHelmet = true;
         }
         if (mapped === "Smartwatch") {
           watch += val;
-          hasExplicitWatch = true;
         }
-      }
-      // HW catalog still stores a single "SOS Devices" bucket (all mapped to helmet).
-      // Fall back to V1 wearable deployments so Smart Watch sites show up.
-      const demo = WEARABLE_DEPLOY[site];
-      if (demo && !hasExplicitWatch && !hasExplicitHelmet) {
-        helmet = demo.helmet;
-        watch = demo.watch;
-      } else if (demo && !hasExplicitWatch && watch === 0) {
-        watch = demo.watch;
-        if (!hasExplicitHelmet && demo.helmet > helmet) helmet = demo.helmet;
       }
       return [site, { helmet, watch }] as [string, { helmet: number; watch: number }];
     })

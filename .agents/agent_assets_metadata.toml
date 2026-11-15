@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "pcVOcStp8hg4LleP83jvJ"
+uri = "file://reports/scc-data-accuracy-review.html"
+type = "html"
+title = "SCC data accuracy investigation and verification"
+description = "Root causes, before/after behavior, changed files, test results, production safeguards, and remaining limits. No publishing performed."
+logical_id = "c0882a53-581a-4ba3-afce-447901c61db7"
+content_hash = "sha256:5e97870a0004f8a46bab20d51a25c57dfede1daefe9c40fd220f4c431aeed63e"
+size = 13935
+mtime_ms = 1794743665893
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:654fd2fb-e80d-4798-b222-06dee7e8777e/c0882a53-581a-4ba3-afce-447901c61db7/80e2245f-1fe6-4bcc-940c-0995c283a577"
+storage_version_token = "1794743702208891"
+content_type = "text/html"

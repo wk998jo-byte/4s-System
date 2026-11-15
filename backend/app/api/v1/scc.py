@@ -831,6 +831,23 @@ def create_hw_register_item(
     return result
 
 
+@router.patch("/hw/register/{item_id}/status")
+def update_hw_register_status(item_id: str, payload: dict, user: UserOut = Depends(require_capability("manage_hw"))):
+    try:
+        saved = platform_store.update_hw_register_status(item_id, str(payload.get("status") or ""))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Device not found.") from None
+    except ValueError as exc:
+        _http_value_error(exc)
+    platform_store.record_audit(
+        actor_user_id=user.id, actor_name=actor_label(user),
+        action="hw_register_status_updated", category="hw",
+        summary=f"Changed device status to {saved['item']['status']}",
+        details={"device_id": item_id, "status": saved["item"]["status"]},
+    )
+    return saved
+
+
 @router.get("/hw/register/template")
 def download_hw_register_template(user: UserOut = Depends(get_current_user)):
     del user
@@ -1037,6 +1054,21 @@ def put_settings(payload: dict, user: UserOut = Depends(require_admin)):
 def get_hw_transfers(user: UserOut = Depends(get_current_user)):
     del user
     return platform_store.get_hw_transfers()
+
+
+@router.post("/hw/transfers", status_code=201)
+def create_hw_transfer(payload: dict, user: UserOut = Depends(require_capability("manage_hw"))):
+    try:
+        saved = platform_store.create_hw_transfer(payload, actor=actor_label(user))
+    except ValueError as exc:
+        _http_value_error(exc)
+    platform_store.record_audit(
+        actor_user_id=user.id, actor_name=actor_label(user),
+        action="hw_transfer_created", category="hw",
+        summary="Created a saved material transfer",
+        details={"transfer_id": saved["item"]["id"], "qty": saved["item"]["qty"]},
+    )
+    return saved
 
 
 @router.post("/hw/transfers/{transfer_id}/receive")

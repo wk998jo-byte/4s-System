@@ -3733,6 +3733,21 @@ class PlatformStore:
                 session.add(AppStateRow(key="hw_register", value=value))
             session.commit()
 
+    def update_hw_register_status(self, item_id: str, status: str) -> dict:
+        with self._lock:
+            items = self.get_hw_register()["items"]
+            item = next((r for r in items if r.get("id") == item_id), None)
+            if item is None:
+                raise KeyError(item_id)
+            if status not in set(self._hw_status_aliases().values()) or (
+                status == "Assigned" and not self._hw_is_wearable(str(item.get("device") or ""))
+            ):
+                raise ValueError("Choose a valid status for this device.")
+            item["status"] = status
+            item["updatedIso"] = datetime.now(timezone.utc).isoformat()
+            self._save_hw_register_items(items)
+        return {"item": item, "items": items, "total": len(items)}
+
     def add_hw_register_item(self, payload) -> dict:
         """Append one Device Register row and bump project inventory."""
         device = str(getattr(payload, "device", "") or "").strip()
@@ -4131,6 +4146,20 @@ class PlatformStore:
             "by_department": departments,
             "details": rows,
             "packets": packets,
+            "report_counts": {
+                "stored_packets": len(packets),
+                "generated": {
+                    kind: sum(
+                        1 for p in packets
+                        if p.get("kind") == kind
+                        and str(p.get("status") or "") not in {
+                            "Compiling", "Scheduled", "No source data"
+                        }
+                        and bool(p.get("generated_at") or self._packet_has_approval(p))
+                    )
+                    for kind in ("daily", "weekly", "monthly")
+                },
+            },
             "settings": self.get_platform_settings(),
         }
 
@@ -4972,12 +5001,20 @@ class PlatformStore:
                 items = []
         # Normalize monthly status from signatures so stale Issued / Ready labels
         # never surface in notifications or other snapshot consumers.
+        source_days = self._report_source_days()
         for item in items:
+            if item.get("kind") in {"daily", "weekly", "monthly"} and not (
+                self._packet_has_source(item, source_days) or self._packet_has_approval(item)
+            ):
+                item["status"] = "No source data"
+                continue
             if item.get("kind") != "monthly":
                 continue
             if str(item.get("status") or "").lower().startswith("compil"):
                 continue
-            item["issued"] = None
+            if item.get("issued"):
+                item["status"] = "Issued"
+                continue
             item["status"] = self._monthly_signature_status(
                 hse_signed=bool(item.get("signed")),
                 pm_signed=bool(item.get("pm_signed")),
@@ -5143,6 +5180,50 @@ class PlatformStore:
     def _report_local_now(self) -> datetime:
         return datetime.now(AST)
 
+    def _report_source_days(self) -> set[tuple[str, str, str]]:
+        """Actual operational dates/scopes, not generated calendar periods."""
+        days = {
+            (str(row.get("project") or ""), str(row["date"])[:10], "case")
+            for row in self.list_cases()
+        }
+        with self._sessions() as session:
+            days.update(
+                (r.project, r.observed_on.isoformat(), "weather")
+                for r in session.query(WeatherHourlyReadingRow).all()
+                if r.status == "ok" and any(v is not None for v in (
+                    r.wind_ms, r.temp_c, r.rh_percent, r.co2_ppm, r.pm25, r.pm10, r.heat_index
+                ))
+            )
+            for r in session.query(WeatherWeeklyLogRow).all():
+                if r.hours_logged:
+                    days.add((r.project, r.week_start.isoformat(), "weekly_weather"))
+                    days.add((r.project, r.week_end.isoformat(), "weekly_weather"))
+        for sheet in self.get_weather():
+            day = sheet.get("observed_on")
+            if day and any(
+                any(reading.get(k) is not None for k in (
+                    "wind_speed_ms", "temperature_c", "rh_percent", "co2_ppm", "pm25", "pm10", "heat_index"
+                ))
+                for reading in (sheet.get("readings") or [])
+                if isinstance(reading, dict)
+            ):
+                days.add((str(sheet.get("project") or ""), str(day)[:10], "weather"))
+        return days
+
+    @staticmethod
+    def _packet_has_source(packet: dict, source_days: set[tuple[str, str, str]]) -> bool:
+        scope = str(packet.get("scope") or "")
+        return any(
+            str(packet.get("a") or "") <= day <= str(packet.get("b") or "")
+            and not (packet.get("kind") == "daily" and source == "weekly_weather")
+            and (packet.get("kind") == "daily" or scope == project)
+            for project, day, source in source_days
+        )
+
+    @staticmethod
+    def _packet_has_approval(packet: dict) -> bool:
+        return bool(packet.get("signed") or packet.get("pm_signed") or packet.get("issued"))
+
     def _parse_daily_at(self, raw: object) -> tuple[int, int]:
         text = str(raw or "23:59").strip() or "23:59"
         match = re.match(r"^(\d{1,2}):(\d{2})$", text)
@@ -5153,7 +5234,7 @@ class PlatformStore:
         return hour, minute
 
     def _rebuild_daily_packets(self, existing: list[dict]) -> list[dict]:
-        """Ensure one saved daily packet per calendar day (incl. empty days).
+        """Build daily schedule candidates; callers must check source data.
 
         Before the Administration dailyAt cutoff, today stays Compiling.
         At/after cutoff (and for every past day), status becomes Generated and
@@ -5170,7 +5251,7 @@ class PlatformStore:
             if isinstance(item, dict)
         }
         rebuilt: list[dict] = []
-        # Keep ~30 days so quiet days still appear between active ones.
+        # Evaluate the recent window without treating its dates as saved reports.
         for offset in range(30):
             day = today - timedelta(days=offset)
             report_id = f"DR-{day.strftime('%Y%m%d')}"
@@ -5184,6 +5265,7 @@ class PlatformStore:
                 ).isoformat()
             prev = by_id.get(report_id) or {}
             item = {
+                **prev,
                 "id": report_id,
                 "kind": "daily",
                 "scope": "All projects",
@@ -5203,18 +5285,15 @@ class PlatformStore:
         return rebuilt
 
     def _report_packets(self) -> list[dict]:
-        projects = [item["label"] for item in self.catalog.get("project")][:4]
+        projects = [item["label"] for item in self.catalog.get("project")]
 
         with self._sessions() as session:
             row = session.get(AppStateRow, "report_packets")
             packets = list(row.value) if row and isinstance(row.value, list) else []
 
-        # Keep unrelated packets; rebuild daily/weekly/monthly from schedule.
-        other = [
-            p
-            for p in packets
-            if p.get("kind") not in {"daily", "weekly", "monthly"}
-        ]
+        # Schedule windows are candidates only. Never create packets for empty
+        # periods. Keep every saved packet, including older and signed history.
+        source_days = self._report_source_days()
         rebuilt_daily = self._rebuild_daily_packets(
             [p for p in packets if p.get("kind") == "daily"]
         )
@@ -5227,12 +5306,32 @@ class PlatformStore:
             projects,
         )
 
-        packets = other + rebuilt_daily + rebuilt_weekly + rebuilt_monthly
+        existing_by_id = {str(p.get("id") or ""): p for p in packets}
+        result = {key: dict(value) for key, value in existing_by_id.items()}
+        for item in rebuilt_daily + rebuilt_weekly + rebuilt_monthly:
+            previous = existing_by_id.get(str(item.get("id") or ""))
+            has_source = self._packet_has_source(item, source_days)
+            if not has_source and not previous:
+                continue
+            if previous and self._packet_has_approval(previous):
+                # Never rewrite signatures or historical issue evidence.
+                result[item["id"]] = dict(previous)
+                continue
+            if not has_source:
+                item["status"] = "No source data"
+            result[item["id"]] = item
+        packets = list(result.values())
+        for item in packets:
+            if item.get("kind") in {"daily", "weekly", "monthly"} and not (
+                self._packet_has_source(item, source_days) or self._packet_has_approval(item)
+            ):
+                item["status"] = "No source data"
         packets = self._dispatch_compile_notifications(packets)
         for item in packets:
             if isinstance(item, dict):
                 item.pop("_prev_status", None)
-        self._save_report_packets(packets)
+        if packets != list(existing_by_id.values()):
+            self._save_report_packets(packets)
         return packets
 
     def _weekday_offset_from_sunday(self, name: str) -> int:
@@ -5263,7 +5362,7 @@ class PlatformStore:
     def _rebuild_weekly_packets(
         self, existing: list[dict], projects: list[str]
     ) -> list[dict]:
-        """One weekly packet per project × recent week, even with 0 cases.
+        """Build weekly schedule candidates per project, not completed reports.
 
         Current week stays Compiling until Administration weeklyDay at dailyAt;
         then it becomes Awaiting HSE signature (and stays signed if already signed).
@@ -5339,6 +5438,7 @@ class PlatformStore:
                 if not finalized:
                     compile_notified_at = None
                 item = {
+                    **prev,
                     "id": report_id,
                     "kind": "weekly",
                     "scope": name,
@@ -5358,7 +5458,7 @@ class PlatformStore:
     def _rebuild_monthly_packets(
         self, existing: list[dict], projects: list[str]
     ) -> list[dict]:
-        """One monthly packet per project × recent month, even with 0 cases.
+        """Build monthly schedule candidates per project, not completed reports.
 
         After Administration monthlyDay of the following month the packet moves
         Compiling → Awaiting signatures. Dept HSE and Project PM each sign;
@@ -5428,6 +5528,7 @@ class PlatformStore:
                 if not finalized:
                     compile_notified_at = None
                 item = {
+                    **prev,
                     "id": report_id,
                     "kind": "monthly",
                     "scope": name,
@@ -5485,7 +5586,7 @@ class PlatformStore:
             status = str(item.get("status") or "")
             prev_status = str(item.pop("_prev_status", "") or "")
             awaiting = status.startswith("Awaiting")
-            newly = awaiting and prev_status in {"", "Compiling"}
+            newly = awaiting and prev_status in {"", "Compiling", "No source data"}
             if not newly or item.get("compile_notified_at"):
                 continue
             if kind == "weekly":
@@ -5619,6 +5720,8 @@ class PlatformStore:
             raise ValueError("A digital signature image is required to sign the report.")
         for item in packets:
             if item.get("id") == report_id:
+                if item.get("status") in {"No source data", "Scheduled", "Compiling"}:
+                    raise ValueError("This report has not been generated and cannot be signed yet.")
                 kind = item.get("kind")
                 if kind == "weekly":
                     if role != "dept_hse":
@@ -5950,12 +6053,8 @@ class PlatformStore:
             if row and isinstance(row.value, dict):
                 return row.value
         empty = {"items": [], "register": []}
-        # Production / fixtures-off: persist empty so restarts never invent sample TRFs.
+        # A read of empty production transfers must not create fixture state.
         if not get_settings().demo_fixtures_enabled:
-            with self._lock, self._sessions() as session:
-                if session.get(AppStateRow, "hw_transfers") is None:
-                    session.add(AppStateRow(key="hw_transfers", value=empty))
-                    session.commit()
             return empty
         sample = {
             "items": [
@@ -5976,6 +6075,51 @@ class PlatformStore:
                 session.add(AppStateRow(key="hw_transfers", value=sample))
                 session.commit()
         return sample
+
+    def create_hw_transfer(self, payload: dict, *, actor: str) -> dict:
+        """Save a real transfer before the UI includes it in counters."""
+        qty = payload.get("qty")
+        serials = payload.get("serials")
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
+            raise ValueError("Quantity must be a positive integer.")
+        if not isinstance(serials, list) or any(not isinstance(s, str) or not s.strip() for s in serials):
+            raise ValueError("Serial numbers are required.")
+        serials = [s.strip() for s in serials]
+        if len(serials) != qty or len({s.lower() for s in serials}) != qty:
+            raise ValueError("Provide one unique serial number per device.")
+        projects = {r["label"] for r in self.catalog.get("hw_site")}
+        source = str(payload.get("from") or "").strip()
+        target = str(payload.get("to") or "").strip()
+        device = str(payload.get("type") or "").strip()
+        kind = str(payload.get("kind") or "")
+        if target not in projects or source not in projects | {"Warehouse"} or source == target:
+            raise ValueError("Choose valid, different transfer locations.")
+        if device not in {r["label"] for r in self.catalog.get("scc_device_type")}:
+            raise ValueError("Choose a valid device category.")
+        if kind not in {"delivery", "shift"}:
+            raise ValueError("Choose delivery or shift.")
+        if device == "AI Camera" and target not in self._ai_camera_sites():
+            raise ValueError("AI cameras can only be sent to supported camera sites.")
+        item = {
+            "id": f"TRF-{uuid4().hex[:12].upper()}",
+            "atIso": datetime.now(timezone.utc).isoformat(),
+            "kind": kind, "from": source, "to": target,
+            "type": device, "qty": qty, "serials": serials,
+            "reason": str(payload.get("reason") or "").strip(),
+            "sender": actor, "receiver": str(payload.get("receiver") or "").strip(),
+            "status": "transit",
+        }
+        with self._lock:
+            state = dict(self.get_hw_transfers())
+            state["items"] = [item, *list(state.get("items") or [])]
+            with self._sessions() as session:
+                row = session.get(AppStateRow, "hw_transfers")
+                if row:
+                    row.value = state
+                else:
+                    session.add(AppStateRow(key="hw_transfers", value=state))
+                session.commit()
+        return {"item": item, "items": state["items"]}
 
     def receive_hw_transfer(self, transfer_id: str, *, actor: str) -> dict:
         state = self.get_hw_transfers()
