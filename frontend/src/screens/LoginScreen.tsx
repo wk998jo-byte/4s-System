@@ -23,8 +23,8 @@ export function LoginScreen() {
   const mustChange = Boolean(user?.must_change_password);
 
   const [mode, setMode] = useState<Mode>("signin");
-  const [username, setUsername] = useState("operator");
-  const [password, setPassword] = useState("operator");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -310,10 +310,6 @@ export function LoginScreen() {
           </>
         ) : (
           <>
-            <p className="muted">
-              Four local roles: Operator, Admin, Dept HSE and Project PM. SSO is not
-              connected in this prototype.
-            </p>
             <form className="form" onSubmit={(event) => void onSubmit(event)}>
               <label>
                 Username
@@ -357,15 +353,6 @@ export function LoginScreen() {
                 </button>
               ) : null}
             </form>
-            <p className="muted login-hint">
-              Operator: <code>operator</code> / <code>operator</code>
-              <br />
-              Admin: <code>admin</code> / <code>admin</code>
-              <br />
-              Dept HSE: <code>hse</code> / <code>hse</code>
-              <br />
-              Project PM: <code>pm</code> / <code>pm</code>
-            </p>
           </>
         )}
       </article>

@@ -202,18 +202,43 @@ function inPeriod(row: CaseSummary, a: number, b: number) {
   return Number.isFinite(t) && t >= a && t <= b;
 }
 
+type EntityKind = "project" | "department";
+
+type EntityRef = { name: string; kind: EntityKind };
+
+type HwScope = {
+  view: ViewId;
+  /** Exact project or department label when scoring one entity; null = all in view. */
+  name?: string | null;
+  kind?: EntityKind | null;
+};
+
 function hwCount(
   hw: HwPayload | null,
-  project: string | null,
+  scope: HwScope,
   match: (dtype: string) => boolean,
 ) {
   if (!hw) return 0;
   let sum = 0;
-  for (const [site, counts] of Object.entries(hw.project_counts || {})) {
-    if (project && site !== project) continue;
-    for (const [dtype, n] of Object.entries(counts)) {
-      if (match(dtype)) sum += Number(n) || 0;
+  const add = (
+    counts: Record<string, Record<string, number>> | undefined,
+    nameFilter: string | null | undefined,
+  ) => {
+    for (const [site, byType] of Object.entries(counts || {})) {
+      if (nameFilter && site !== nameFilter) continue;
+      for (const [dtype, n] of Object.entries(byType)) {
+        if (match(dtype)) sum += Number(n) || 0;
+      }
     }
+  };
+  if (scope.kind === "department" || scope.view === "departments") {
+    add(hw.department_counts, scope.name);
+  } else if (scope.kind === "project" || scope.view === "projects") {
+    add(hw.project_counts, scope.name);
+  } else {
+    // Over All: projects + departments (same basis as HW / Dashboard summary).
+    add(hw.project_counts, scope.name);
+    add(hw.department_counts, scope.name);
   }
   return sum;
 }
@@ -221,7 +246,7 @@ function hwCount(
 function computeMetrics(
   rows: CaseSummary[],
   hw: HwPayload | null,
-  project: string | null,
+  scope: HwScope,
 ): ProjectMetrics {
   const all = rows.filter((r) => r.record_type !== "itqan");
   const done = all.filter(isDone);
@@ -249,8 +274,8 @@ function computeMetrics(
   );
   const slDone = sl.filter((r) => r.status !== "open").length;
   const pos = ai.filter((r) => /positive/i.test(caseField(r, "alert_type"))).length;
-  const gps = hwCount(hw, project, (d) => /avl|gps/i.test(d));
-  const cams = hwCount(hw, project, (d) => /camera|cctv/i.test(d));
+  const gps = hwCount(hw, scope, (d) => /avl|gps/i.test(d));
+  const cams = hwCount(hw, scope, (d) => /camera|cctv/i.test(d));
   return {
     n: all.length,
     sla: pct(onTime, done.length),
@@ -264,6 +289,46 @@ function computeMetrics(
     pos: pct(pos, ai.length),
     vio: vio.length,
   };
+}
+
+function entityColumnLabel(view: ViewId): string {
+  if (view === "departments") return "Department";
+  if (view === "projects") return "Project";
+  return "Project / department";
+}
+
+function scorecardTitle(view: ViewId): string {
+  if (view === "departments") return "Department scorecard";
+  if (view === "projects") return "Project scorecard";
+  return "Project & department scorecard";
+}
+
+function comparisonTitle(view: ViewId): string {
+  if (view === "departments") return "Department comparison";
+  if (view === "projects") return "Project comparison";
+  return "Project & department comparison";
+}
+
+function heatTitle(view: ViewId): string {
+  if (view === "departments") return "Violations heat map by month and department";
+  if (view === "projects") return "Violations heat map by month and project";
+  return "Violations heat map by month and project / department";
+}
+
+function rowsForEntity(
+  rows: CaseSummary[],
+  entity: EntityRef,
+  view: ViewId,
+): CaseSummary[] {
+  if (entity.kind === "project") {
+    return rows.filter((r) => r.project === entity.name);
+  }
+  // By Department: all records tagged with that department.
+  if (view === "departments") {
+    return rows.filter((r) => r.department === entity.name);
+  }
+  // Over All: department-only rows (no project) so entities are not double-counted.
+  return rows.filter((r) => r.department === entity.name && !r.project);
 }
 
 function scoreOf(x: ProjectMetrics) {
@@ -349,9 +414,11 @@ function MiniIcon({ name }: { name: "clock" | "gps" | "cam" | "report" }) {
 function RadarChart({
   projects,
   series,
+  ariaLabel = "Comparison",
 }: {
   projects: string[];
   series: number[][];
+  ariaLabel?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
@@ -392,7 +459,7 @@ function RadarChart({
       ref={hostRef}
       onMouseLeave={() => setTip(null)}
     >
-      <svg viewBox={`0 0 ${size} ${size}`} className="kpi-radar" role="img" aria-label="Project comparison">
+      <svg viewBox={`0 0 ${size} ${size}`} className="kpi-radar" role="img" aria-label={ariaLabel}>
         {[25, 50, 75, 100].map((p) => (
           <path key={p} d={ring(p)} className="kpi-radar-grid" pointerEvents="none" />
         ))}
@@ -821,15 +888,26 @@ export function KpiScreen() {
 
   const overall = useMemo(
     () =>
-      computeMetrics(
-        scoped,
-        hw,
-        view === "projects" && project ? project : null,
-      ),
-    [scoped, hw, view, project],
+      computeMetrics(scoped, hw, {
+        view,
+        name:
+          view === "projects" && project
+            ? project
+            : view === "departments" && department
+              ? department
+              : null,
+        kind:
+          view === "projects"
+            ? "project"
+            : view === "departments"
+              ? "department"
+              : null,
+      }),
+    [scoped, hw, view, project, department],
   );
 
-  const scorecard = useMemo(() => {
+  /** Entities for scorecard / radar / heat — mirrors Dashboard Over All = projects + departments. */
+  const entities = useMemo((): EntityRef[] => {
     if (view === "departments") {
       const names = department
         ? [department]
@@ -840,27 +918,58 @@ export function KpiScreen() {
                 scoped.map((r) => r.department).filter(Boolean) as string[],
               ),
             ];
-      return names.map((name) => {
-        const rows = scoped.filter((r) => r.department === name);
-        const metrics = computeMetrics(rows, hw, null);
-        return { name, metrics, score: scoreOf(metrics) };
-      });
+      return names.map((name) => ({ name, kind: "department" as const }));
     }
-    const names = view === "projects" && project ? [project] : projects;
-    return names.map((name) => {
-      const rows = scoped.filter((r) => r.project === name);
-      const metrics = computeMetrics(rows, hw, name);
-      return { name, metrics, score: scoreOf(metrics) };
-    });
+    if (view === "projects") {
+      const names = project ? [project] : projects;
+      return names.map((name) => ({ name, kind: "project" as const }));
+    }
+    const projNames = (
+      projectAccess.hasAllProjectAccess
+        ? catalogProjects
+        : projectAccess.accessProjects
+    ).filter(Boolean);
+    const deptNames = catalogDepartments.length
+      ? catalogDepartments
+      : [
+          ...new Set(
+            cases.map((r) => r.department).filter(Boolean) as string[],
+          ),
+        ];
+    return [
+      ...projNames.map((name) => ({ name, kind: "project" as const })),
+      ...deptNames.map((name) => ({ name, kind: "department" as const })),
+    ];
   }, [
     view,
     department,
     project,
     catalogDepartments,
+    catalogProjects,
     projects,
     scoped,
-    hw,
+    cases,
+    projectAccess.hasAllProjectAccess,
+    projectAccess.accessProjects,
   ]);
+
+  const scorecard = useMemo(() => {
+    return entities.map((entity) => {
+      const rows = rowsForEntity(scoped, entity, view);
+      const metrics = computeMetrics(rows, hw, {
+        view,
+        name: entity.name,
+        kind: entity.kind,
+      });
+      return {
+        key: `${entity.kind}:${entity.name}`,
+        name: entity.name,
+        kind: entity.kind,
+        metrics,
+        score: scoreOf(metrics),
+      };
+    });
+  }, [entities, scoped, hw, view]);
 
   const ranked = useMemo(
     () => [...scorecard].sort((a, b) => b.score - a.score),
@@ -898,40 +1007,29 @@ export function KpiScreen() {
   }, [cases, monthCount, year, nowMs, view, project, department, projectAccess]);
 
   const heat = useMemo(() => {
-    const names =
-      view === "departments"
-        ? department
-          ? [department]
-          : catalogDepartments.slice(0, 8)
-        : view === "projects" && project
-          ? [project]
-          : projects;
-    const rows = names.map((name) => {
+    const rows = entities.map((entity) => {
       const counts = Array.from({ length: monthCount }, (_, i) => {
         const a = new Date(year, i, 1).getTime();
         const b = Math.min(new Date(year, i + 1, 1).getTime() - 1, nowMs);
         return cases.filter((r) => {
           if (r.record_type !== "dashcam" && r.record_type !== "speed") return false;
+          if (!rowAllowedForProjects(r.project, projectAccess)) return false;
           if (!inPeriod(r, a, b)) return false;
-          if (view === "departments") return r.department === name;
-          return r.project === name;
+          if (entity.kind === "project") return r.project === entity.name;
+          if (view === "departments") return r.department === entity.name;
+          return r.department === entity.name && !r.project;
         }).length;
       });
-      return { name, counts };
+      return {
+        key: `${entity.kind}:${entity.name}`,
+        name: entity.name,
+        kind: entity.kind,
+        counts,
+      };
     });
     const max = Math.max(1, ...rows.flatMap((r) => r.counts));
     return { rows, max };
-  }, [
-    projects,
-    catalogDepartments,
-    monthCount,
-    year,
-    nowMs,
-    cases,
-    view,
-    project,
-    department,
-  ]);
+  }, [entities, monthCount, year, nowMs, cases, view, projectAccess]);
 
   const offenders = useMemo(() => {
     const map = new Map<string, number>();
@@ -1271,14 +1369,16 @@ export function KpiScreen() {
       <article className="v1-card">
         <div className="hd">
           <div>
-            <h3>{view === "departments" ? "Department scorecard" : "Project scorecard"}</h3>
+            <h3>{scorecardTitle(view)}</h3>
             <p className="sub">
               Score = on-time 35% · closure 25% · ITQAN 15% · SafeLife 10% · overdue 15%
               {view === "projects" && !project
                 ? " · project-assigned records only"
                 : view === "departments" && !department
                   ? " · department-assigned records only"
-                  : ""}
+                  : view === "overall"
+                    ? " · every project and department"
+                    : ""}
             </p>
           </div>
         </div>
@@ -1287,7 +1387,7 @@ export function KpiScreen() {
             <thead>
               <tr>
                 <th>Rank</th>
-                <th>{view === "departments" ? "Department" : "Project"}</th>
+                <th>{entityColumnLabel(view)}</th>
                 <th className="n">Records</th>
                 <th className="n">On time</th>
                 <th className="n">Closure</th>
@@ -1302,12 +1402,15 @@ export function KpiScreen() {
             </thead>
             <tbody>
               {ranked.map((row, i) => (
-                <tr key={row.name}>
+                <tr key={row.key}>
                   <td>
                     <b className="mono">#{i + 1}</b>
                   </td>
                   <td>
                     <b>{row.name}</b>
+                    {view === "overall" && row.kind === "department" ? (
+                      <span className="muted"> · Dept</span>
+                    ) : null}
                   </td>
                   <td className="n">{fmtN(row.metrics.n)}</td>
                   <td className="n">{row.metrics.sla}%</td>
@@ -1344,12 +1447,17 @@ export function KpiScreen() {
         <article className="v1-card kpi-chart-card">
           <div className="hd">
             <div>
-              <h3>{view === "departments" ? "Department comparison" : "Project comparison"}</h3>
+              <h3>{comparisonTitle(view)}</h3>
               <p className="sub">Each axis is 0–100, higher is better</p>
             </div>
           </div>
           <RadarChart
-            projects={scorecard.map((p) => p.name)}
+            ariaLabel={comparisonTitle(view)}
+            projects={scorecard.map((p) =>
+              view === "overall" && p.kind === "department"
+                ? `${p.name} (Dept)`
+                : p.name,
+            )}
             series={scorecard.map((p) => [
               p.metrics.sla,
               p.metrics.closure,
@@ -1363,7 +1471,14 @@ export function KpiScreen() {
           <div className="hd">
             <div>
               <h3>Monthly performance trend</h3>
-              <p className="sub">On-time close-out and closure rate per month</p>
+              <p className="sub">
+                On-time close-out and closure rate per month
+                {view === "departments"
+                  ? " · department scope"
+                  : view === "projects"
+                    ? " · project scope"
+                    : " · all projects and departments"}
+              </p>
             </div>
           </div>
           <TrendChart
@@ -1378,7 +1493,7 @@ export function KpiScreen() {
         <article className="v1-card">
           <div className="hd">
             <div>
-              <h3>Violations heat map by month and project</h3>
+              <h3>{heatTitle(view)}</h3>
               <p className="sub">Dashcam, Speed and ROW violations</p>
             </div>
           </div>
@@ -1386,7 +1501,7 @@ export function KpiScreen() {
             <table className="tbl kpi-heat">
               <thead>
                 <tr>
-                  <th>Project</th>
+                  <th>{entityColumnLabel(view)}</th>
                   {monthLabels.map((m) => (
                     <th className="n" key={m}>
                       {m}
@@ -1396,9 +1511,12 @@ export function KpiScreen() {
               </thead>
               <tbody>
                 {heat.rows.map((row) => (
-                  <tr key={row.name}>
+                  <tr key={row.key}>
                     <td>
                       <b>{row.name}</b>
+                      {view === "overall" && row.kind === "department" ? (
+                        <span className="muted"> · Dept</span>
+                      ) : null}
                     </td>
                     {row.counts.map((v, i) => {
                       const h = v / heat.max;
@@ -1442,6 +1560,11 @@ export function KpiScreen() {
             <h3>Leading vs lagging indicators</h3>
             <p className="sub">
               Observations raised (leading) against violations recorded (lagging), by week
+              {view === "departments"
+                ? " · department scope"
+                : view === "projects"
+                  ? " · project scope"
+                  : " · all projects and departments"}
             </p>
           </div>
         </div>
