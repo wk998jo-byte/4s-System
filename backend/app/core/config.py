@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # environments keep local/dev demo setup enabled.
     seed_demo_cases: bool | None = None
     seed_demo_users: bool | None = None
+    # Synthetic HW counts, sample transfers, and named Key Personnel packs.
+    # Independent of case demos so production can stay empty after cleanup.
+    seed_demo_fixtures: bool | None = None
 
     # Server-side session lifetime (minutes). Validated on every auth check.
     session_ttl_minutes: int = Field(default=720, ge=5, le=60 * 24 * 30)
@@ -81,6 +84,13 @@ class Settings(BaseSettings):
     def demo_users_enabled(self) -> bool:
         if self.seed_demo_users is not None:
             return bool(self.seed_demo_users)
+        return not self.is_production
+
+    @property
+    def demo_fixtures_enabled(self) -> bool:
+        """HW inventory/department matrices, sample transfers, named KP packs."""
+        if self.seed_demo_fixtures is not None:
+            return bool(self.seed_demo_fixtures)
         return not self.is_production
 
     @property

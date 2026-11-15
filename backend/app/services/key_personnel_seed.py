@@ -731,3 +731,11 @@ def default_key_personnel_packs() -> dict:
         "Ras Tanura": ras_tanura_pack(),
         "Dhahran": empty_project_pack("Dhahran"),
     }
+
+
+def empty_key_personnel_packs() -> dict:
+    """Structural Key Personnel tabs without synthetic contact names."""
+    return {
+        project_id: empty_project_pack(project_id)
+        for project_id in ("Jafurah", "MGS", "Yanbu", "Ras Tanura", "Dhahran")
+    }
