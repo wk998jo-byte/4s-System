@@ -8,9 +8,13 @@ modules = ["nodejs-20", "postgresql-16", "python-3.12"]
 channel = "stable-24_05"
 
 [deployment]
-run = ["bash", "scripts/replit_start.sh"]
+build = ["bash", "scripts/replit_build.sh"]
+run = ["bash", "scripts/replit_run.sh"]
 deploymentTarget = "cloudrun"
 
 [[ports]]
 localPort = 8000
 externalPort = 80
+
+[objectStorage]
+defaultBucketID = "replit-objstore-40d6bb8b-99db-496f-b4ef-ffcfbe16b09f"
