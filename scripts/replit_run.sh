@@ -18,7 +18,12 @@ test -f "$FRONTEND_DIST/index.html" || {
 cd backend
 echo "[RUN] Starting FastAPI on port $PORT"
 
-exec python -m uvicorn app.main:app \
+test -x "$ROOT/.venv/bin/python" || {
+  echo "[RUN] ERROR: Python virtual environment missing"
+  exit 1
+}
+
+exec "$ROOT/.venv/bin/python" -m uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "$PORT" \
   --proxy-headers
