@@ -23,6 +23,10 @@ test -x "$ROOT/.venv/bin/python" || {
   exit 1
 }
 
+# Prevent Replit development site-packages from overriding venv dependencies.
+unset PYTHONPATH
+unset PYTHONUSERBASE
+
 exec "$ROOT/.venv/bin/python" -m uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "$PORT" \
