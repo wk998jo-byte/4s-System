@@ -15,7 +15,7 @@ test -f dist/index.html
 echo "[BUILD] Installing backend dependencies"
 cd ../backend
 python -m venv "$ROOT/.venv"
-"$ROOT/.venv/bin/python" -m pip install -r requirements.txt
+PIP_USER=false "$ROOT/.venv/bin/python" -m pip install --no-user -r requirements.txt
 "$ROOT/.venv/bin/python" -m pip check
 
 echo "[BUILD] SUCCESS"
