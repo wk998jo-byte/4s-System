@@ -499,15 +499,8 @@ class PlatformStore:
                 raise ValueError("User not found or inactive.")
             now = datetime.now(timezone.utc)
             media_ttl = max(5, int(get_settings().media_token_ttl_minutes))
-            for sibling in (
-                session.query(SessionRow)
-                .filter(
-                    SessionRow.user_id == user_id,
-                    SessionRow.purpose == "media",
-                )
-                .all()
-            ):
-                session.delete(sibling)
+            # Preserve existing valid media tokens across browser tabs.
+            # They expire normally and logout still revokes them.
             media_token = token_urlsafe(32)
             session.add(
                 SessionRow(

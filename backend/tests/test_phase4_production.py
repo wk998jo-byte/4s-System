@@ -152,6 +152,11 @@ def test_legacy_access_token_rejected_when_disabled(
         new_media = refreshed.json()["media_token"]
         assert new_media
         assert new_media != media
+        assert media is not None
+        # Refresh must not invalidate images in another browser tab.
+        assert client.get(
+            f"/uploads/{name}?media_token={media}"
+        ).status_code == 200
         assert (
             client.get(f"/uploads/{name}?media_token={new_media}").status_code == 200
         )
