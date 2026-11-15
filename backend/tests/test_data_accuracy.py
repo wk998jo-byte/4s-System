@@ -265,6 +265,7 @@ def test_authenticated_api_empty_states_and_saved_transfer_permissions(store, mo
             session.add(UserRow(
                 id=f"api-test-{role}", username=f"api-test-{role}", display_name=f"Test {role}",
                 role=role, password_hash=hash_password("IsolatedTestOnly2026!"), is_active=True,
+                projects=None if role == "admin" else ["Jafurah"],
             ))
         session.commit()
     _patch_store(monkeypatch, store)

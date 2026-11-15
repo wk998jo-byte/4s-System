@@ -1,1 +1,2 @@
 - [Company-data protection](company-data-protection.md) — Key Personnel and Contacts are valid company information; preserve them during operational-data cleanup.
+- [Project authorization policy](project-authorization.md) — Owner chose authorized-project daily views; missing assignments must not grant global access.

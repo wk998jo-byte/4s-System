@@ -33,12 +33,36 @@ from app.schemas.scc import (
     WeatherWeeklySubmitIn,
 )
 from app.services.platform_store import platform_store
+from app.services.project_access import can_access_project, can_view_report, project_scope
 
 router = APIRouter(tags=["SCC screens"], dependencies=[Depends(get_current_user)])
 
 
 def _http_value_error(exc: ValueError) -> None:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _require_assignments(user: UserOut) -> dict:
+    identity = user.model_dump()
+    if project_scope(identity) == frozenset():
+        raise HTTPException(status_code=403, detail="No authorized projects are assigned.")
+    return identity
+
+
+def _require_project(user: UserOut, project: object) -> None:
+    if not can_access_project(_require_assignments(user), project):
+        raise HTTPException(status_code=403, detail="This project is not authorized.")
+
+
+def _authorized_report(user: UserOut, report_id: str) -> dict:
+    identity = _require_assignments(user)
+    # Do not run the report compiler before checking the stored object's scope.
+    packet = platform_store.find_saved_report_packet(report_id)
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    if not can_view_report(identity, packet):
+        raise HTTPException(status_code=403, detail="This report is not authorized.")
+    return packet
 
 
 def as_summary(row: dict) -> CaseSummary:
@@ -773,8 +797,8 @@ def remove_contact(contact_id: str, user: UserOut = Depends(require_admin)):
 
 
 @router.get("/hw")
-def get_hw():
-    return platform_store.get_hw()
+def get_hw(user: UserOut = Depends(get_current_user)):
+    return platform_store.get_hw(user=_require_assignments(user))
 
 
 @router.put("/hw")
@@ -802,8 +826,7 @@ def put_hw(payload: HwUpdate, user: UserOut = Depends(require_admin)):
 
 @router.get("/hw/register")
 def get_hw_register(user: UserOut = Depends(get_current_user)):
-    del user
-    return platform_store.get_hw_register()
+    return platform_store.get_hw_register(user=_require_assignments(user))
 
 
 @router.post("/hw/register")
@@ -811,6 +834,7 @@ def create_hw_register_item(
     payload: HwRegisterCreate,
     user: UserOut = Depends(get_current_user),
 ):
+    _require_project(user, payload.project)
     try:
         result = platform_store.add_hw_register_item(payload)
     except ValueError as exc:
@@ -828,11 +852,21 @@ def create_hw_register_item(
             "status": payload.status,
         },
     )
+    # The store's mutation result contains the full register/inventory for
+    # trusted internal callers. Do not leak it to a project-scoped creator.
+    identity = user.model_dump()
+    result.update(platform_store.get_hw_register(user=identity))
+    result["hw"] = platform_store.get_hw(user=identity)
     return result
 
 
 @router.patch("/hw/register/{item_id}/status")
 def update_hw_register_status(item_id: str, payload: dict, user: UserOut = Depends(require_capability("manage_hw"))):
+    _require_assignments(user)
+    item = next((r for r in platform_store.get_hw_register()["items"] if r.get("id") == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Device not found.")
+    _require_project(user, item.get("project"))
     try:
         saved = platform_store.update_hw_register_status(item_id, str(payload.get("status") or ""))
     except KeyError:
@@ -903,7 +937,7 @@ async def import_hw_register(
 
 @router.get("/reports")
 def get_reports(user: UserOut = Depends(get_current_user)):
-    return platform_store.reports(user=user.model_dump())
+    return platform_store.reports(user=_require_assignments(user))
 
 
 @router.post("/reports/{report_id}/sign")
@@ -912,9 +946,7 @@ def sign_report(
     body: ReportSignIn,
     user: UserOut = Depends(get_current_user),
 ):
-    packet = platform_store.get_report_packet(report_id)
-    if not packet:
-        raise HTTPException(status_code=404, detail="Report not found.")
+    packet = _authorized_report(user, report_id)
     kind = packet.get("kind")
     if kind == "weekly":
         if not user.capabilities.get("sign_reports") or user.role != "dept_hse":
@@ -978,6 +1010,7 @@ async def issue_report(
     excel: UploadFile | None = File(None),
     pdf: UploadFile | None = File(None),
 ):
+    _authorized_report(user, report_id)
     excel_bytes = await excel.read() if excel is not None else None
     pdf_bytes = await pdf.read() if pdf is not None else None
     try:
@@ -1052,12 +1085,14 @@ def put_settings(payload: dict, user: UserOut = Depends(require_admin)):
 
 @router.get("/hw/transfers")
 def get_hw_transfers(user: UserOut = Depends(get_current_user)):
-    del user
-    return platform_store.get_hw_transfers()
+    return platform_store.get_hw_transfers(user=_require_assignments(user))
 
 
 @router.post("/hw/transfers", status_code=201)
 def create_hw_transfer(payload: dict, user: UserOut = Depends(require_capability("manage_hw"))):
+    _require_project(user, payload.get("to"))
+    if payload.get("from") != "Warehouse":
+        _require_project(user, payload.get("from"))
     try:
         saved = platform_store.create_hw_transfer(payload, actor=actor_label(user))
     except ValueError as exc:
@@ -1075,6 +1110,13 @@ def create_hw_transfer(payload: dict, user: UserOut = Depends(require_capability
 def receive_hw_transfer(transfer_id: str, user: UserOut = Depends(get_current_user)):
     if not user.capabilities.get("receive_hw"):
         raise HTTPException(status_code=403, detail="Receiving transfers requires Project PM or Admin.")
+    _require_assignments(user)
+    item = platform_store.find_saved_hw_transfer(transfer_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Transfer not found.")
+    # A sender may view an inter-project transfer, but only its destination
+    # project's PM may acknowledge delivery. Never authorize from caller input.
+    _require_project(user, item.get("to"))
     try:
         item = platform_store.receive_hw_transfer(transfer_id, actor=actor_label(user))
     except KeyError:

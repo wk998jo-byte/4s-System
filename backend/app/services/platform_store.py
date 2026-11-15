@@ -41,6 +41,12 @@ from app.services.auth import (
     verify_password,
 )
 from app.services.catalog import CONTACT_CATEGORIES, Catalog
+from app.services.project_access import (
+    can_access_project,
+    can_view_report,
+    can_view_transfer,
+    project_scope,
+)
 from app.services.uploads import ensure_demo_image
 from app.services.week import week_from_date
 
@@ -3607,17 +3613,24 @@ class PlatformStore:
             "updated_at": state.get("updated_at"),
         }
 
-    def get_hw(self) -> dict:
+    def get_hw(self, user: dict | None = None) -> dict:
         raw = self._hw_state()
         dirty = self._ai_camera_inventory_dirty(raw)
         state = self._align_hw(raw)
         project = {site: dict(counts) for site, counts in state["project"].items()}
         dept = {name: dict(counts) for name, counts in state["department"].items()}
-        if dirty:
+        allowed = project_scope(user)
+        if dirty and allowed is None:
             self._persist_hw_state(project, dept)
             updated = datetime.now(timezone.utc).isoformat()
         else:
             updated = state.get("updated_at")
+        if allowed is not None:
+            project = {site: counts for site, counts in project.items() if site in allowed}
+            # Department inventory has no project ownership and cannot be
+            # attributed to an assigned project safely.
+            dept = {}
+            updated = None
         totals = {}
         grand = 0
         for site, counts in project.items():
@@ -3701,7 +3714,7 @@ class PlatformStore:
             raise FileNotFoundError("HW device register template is missing.")
         return path
 
-    def get_hw_register(self) -> dict:
+    def get_hw_register(self, user: dict | None = None) -> dict:
         with self._sessions() as session:
             row = session.get(AppStateRow, "hw_register")
             items = []
@@ -3718,7 +3731,8 @@ class PlatformStore:
                             device, status
                         )
                         items.append(coerced)
-            return {"items": items, "total": len(items)}
+        items = [item for item in items if can_access_project(user, item.get("project"))]
+        return {"items": items, "total": len(items)}
 
     def _save_hw_register_items(self, items: list[dict]) -> None:
         value = {
@@ -4099,12 +4113,12 @@ class PlatformStore:
         }
 
     def reports(self, user: dict | None = None) -> dict:
-        # Daily reports are all-project scope — always return full case details.
-        # Weekly/monthly packets are filtered to the caller's assigned projects.
         rows = self.list_cases()
         catalog_projects = [item["label"] for item in self.catalog.get("project")]
-        allowed = user.get("projects") if user else None
-        allowed_set = {str(item) for item in allowed} if allowed else None
+        allowed_set = project_scope(user)
+        if allowed_set is not None:
+            rows = [row for row in rows if can_access_project(user, row.get("project"))]
+            catalog_projects = [p for p in catalog_projects if p in allowed_set]
         by_project = []
         for name in catalog_projects:
             subset = [row for row in rows if row["project"] == name]
@@ -4132,14 +4146,28 @@ class PlatformStore:
                     "total": len(subset),
                 }
             )
-        packets = self._report_packets()
-        if allowed_set:
-            packets = [
-                packet
-                for packet in packets
-                if packet.get("kind") not in {"weekly", "monthly"}
-                or (packet.get("scope") or "") in allowed_set
-            ]
+        packets = self._report_packets() if allowed_set is None or allowed_set else []
+        packets = [packet for packet in packets if can_view_report(user, packet)]
+        settings = self.get_platform_settings()
+        if allowed_set is not None:
+            source_days = {
+                source for source in self._report_source_days() if source[0] in allowed_set
+            } if allowed_set else set()
+            visible = []
+            for packet in packets:
+                if packet.get("kind") != "daily":
+                    visible.append(packet)
+                elif self._packet_has_source(packet, source_days):
+                    # Daily packets are shared all-project schedule records.
+                    # Return only safe metadata and the already-filtered case
+                    # details; never rewrite or sign the shared saved packet.
+                    view = {key: packet.get(key) for key in (
+                        "id", "kind", "label", "a", "b", "status", "generated_at"
+                    )}
+                    view["scope"] = "Authorized projects"
+                    visible.append(view)
+            packets = visible
+            settings = {key: settings[key] for key in ("dailyAt", "weeklyDay", "monthlyDay") if key in settings}
         return {
             "prototype": True,
             "by_project": by_project,
@@ -4160,7 +4188,7 @@ class PlatformStore:
                     for kind in ("daily", "weekly", "monthly")
                 },
             },
-            "settings": self.get_platform_settings(),
+            "settings": settings,
         }
 
     def _default_platform_settings(self) -> dict:
@@ -5108,18 +5136,20 @@ class PlatformStore:
         items.sort(key=lambda item: item["age_hours"], reverse=True)
         return items
 
-    def _hse_report_ready_notifications(self) -> list[dict]:
+    def _hse_report_ready_notifications(self, user: dict | None = None) -> list[dict]:
         """Dept HSE: weekly + monthly packs awaiting HSE signature."""
+        allowed = project_scope(user)
         return self._report_ready_notifications(
-            kinds={"weekly", "monthly"}, for_role="dept_hse"
+            kinds={"weekly", "monthly"}, for_role="dept_hse",
+            projects=sorted(allowed) if allowed is not None else None,
         )
 
     def _pm_report_ready_notifications(self, user: dict | None = None) -> list[dict]:
         """Project PM: monthly packs awaiting PM signature only."""
-        projects = (user or {}).get("projects")
+        projects = project_scope(user)
         return self._report_ready_notifications(
             kinds={"monthly"},
-            projects=projects if isinstance(projects, list) else None,
+            projects=sorted(projects) if projects is not None else None,
             for_role="receiver",
         )
 
@@ -5699,6 +5729,20 @@ class PlatformStore:
                 return dict(item)
         return None
 
+    def find_saved_report_packet(self, report_id: str) -> dict | None:
+        """Authoritative scope lookup without compilation, writes or email."""
+        with self._sessions() as session:
+            row = session.get(AppStateRow, "report_packets")
+            packets = row.value if row and isinstance(row.value, list) else []
+            return next((dict(p) for p in packets if p.get("id") == report_id), None)
+
+    def find_saved_hw_transfer(self, transfer_id: str) -> dict | None:
+        """Read an existing transfer without invoking development fixtures."""
+        with self._sessions() as session:
+            row = session.get(AppStateRow, "hw_transfers")
+            state = row.value if row and isinstance(row.value, dict) else {}
+            return next((dict(r) for r in state.get("items", []) if r.get("id") == transfer_id), None)
+
     def resolve_monthly_distribution(self, scope: str) -> dict:
         """Return {name, email} for a project's monthly distribution (test override wins)."""
         settings = self.get_platform_settings()
@@ -6000,7 +6044,7 @@ class PlatformStore:
                 else []
             )
             if notify_hse:
-                items.extend(self._hse_report_ready_notifications())
+                items.extend(self._hse_report_ready_notifications(user))
         elif role == "admin":
             items = (
                 [item for item in items if item["state"] in {"over", "esc"}]
@@ -6047,14 +6091,20 @@ class PlatformStore:
             },
         }
 
-    def get_hw_transfers(self) -> dict:
+    def get_hw_transfers(self, user: dict | None = None) -> dict:
         with self._sessions() as session:
             row = session.get(AppStateRow, "hw_transfers")
             if row and isinstance(row.value, dict):
-                return row.value
+                state = row.value
+                if project_scope(user) is None:
+                    return state
+                return {
+                    "items": [r for r in state.get("items", []) if can_view_transfer(user, r)],
+                    "register": [r for r in state.get("register", []) if can_view_transfer(user, r)],
+                }
         empty = {"items": [], "register": []}
         # A read of empty production transfers must not create fixture state.
-        if not get_settings().demo_fixtures_enabled:
+        if project_scope(user) is not None or not get_settings().demo_fixtures_enabled:
             return empty
         sample = {
             "items": [
