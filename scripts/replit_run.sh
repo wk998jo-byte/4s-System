@@ -27,6 +27,27 @@ test -x "$ROOT/.venv/bin/python" || {
 unset PYTHONPATH
 unset PYTHONUSERBASE
 
+echo "[RUN] Python application import diagnostic"
+"$ROOT/.venv/bin/python" - <<'CHECK'
+try:
+    import app.main
+    print("APP_IMPORT: PASS", flush=True)
+except Exception as exc:
+    print("APP_IMPORT: FAIL", flush=True)
+    print("ERROR_TYPE:", type(exc).__name__, flush=True)
+    print("ERROR_MODULE:", type(exc).__module__, flush=True)
+    # Avoid printing raw exception text: it may contain secrets.
+    import traceback
+    from pathlib import Path
+    frames = traceback.extract_tb(exc.__traceback__)
+    if frames:
+        frame = frames[-1]
+        print("ERROR_LOCATION:",
+              f"{Path(frame.filename).name}:{frame.lineno}",
+              flush=True)
+    raise SystemExit(1)
+CHECK
+
 exec "$ROOT/.venv/bin/python" -m uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "$PORT" \
