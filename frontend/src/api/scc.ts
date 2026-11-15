@@ -1,4 +1,4 @@
-import { getMediaToken, getToken } from "../auth/session";
+import { getMediaToken } from "../auth/session";
 import { getApiBaseUrl, joinUrl } from "./client";
 import { request } from "./http";
 
@@ -126,7 +126,7 @@ export const uploadImage = (file: File) => {
 /**
  * Turn a stored picture field into an `<img src>`.
  * Real uploads are `/uploads/...`; older prototype rows only stored a filename.
- * Prefer short-lived media_token (attachment-only); fall back to access_token.
+ * Production rejects legacy ?access_token= — only media_token works for <img>.
  */
 export function resolveMediaUrl(value: string | null | undefined): string | null {
   const v = (value || "").trim();
@@ -142,17 +142,22 @@ export function resolveMediaUrl(value: string | null | undefined): string | null
     let url = joinUrl(getApiBaseUrl(), v);
     if (v.startsWith("/uploads/")) {
       const media = getMediaToken();
-      const access = getToken();
-      const sep = url.includes("?") ? "&" : "?";
       if (media) {
+        const sep = url.includes("?") ? "&" : "?";
         url = `${url}${sep}media_token=${encodeURIComponent(media)}`;
-      } else if (access) {
-        url = `${url}${sep}access_token=${encodeURIComponent(access)}`;
       }
     }
     return url;
   }
   return null;
+}
+
+/** Mint/refresh attachment token while the API session is still valid. */
+export async function refreshMediaToken(): Promise<string | null> {
+  const result = await request<{ media_token: string }>("/api/v1/auth/media-token", {
+    method: "POST",
+  });
+  return result.media_token || null;
 }
 
 export const putJson = <T,>(path: string, body: unknown) =>

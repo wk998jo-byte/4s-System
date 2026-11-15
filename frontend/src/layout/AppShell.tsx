@@ -615,8 +615,8 @@ export function AppShell({
             {!isPm ? (
               <p className="npanel-hint">
                 Deadlines: High {overdue?.deadlines?.High ?? 24} h · Medium{" "}
-                {overdue?.deadlines?.Medium ?? 72} h / 3 days · Low{" "}
-                {overdue?.deadlines?.Low ?? 168} h / 7 days · SOS{" "}
+                {overdue?.deadlines?.Medium ?? 72} h · Low{" "}
+                {overdue?.deadlines?.Low ?? 168} h · SOS{" "}
                 {overdue?.deadlines?.SOS ?? 2} h. Escalation after{" "}
                 {overdue?.deadlines?.escalate ?? 2}× the deadline.
               </p>

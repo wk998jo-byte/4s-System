@@ -143,6 +143,18 @@ def test_legacy_access_token_rejected_when_disabled(
             f"/uploads/{name}", headers={"Authorization": f"Bearer {token}"}
         )
         assert bearer.status_code == 200
+        # Fresh media token via API session (SPA boot / expired media_token recovery).
+        refreshed = client.post(
+            "/api/v1/auth/media-token",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert refreshed.status_code == 200
+        new_media = refreshed.json()["media_token"]
+        assert new_media
+        assert new_media != media
+        assert (
+            client.get(f"/uploads/{name}?media_token={new_media}").status_code == 200
+        )
 
 
 def test_auth_rate_limiter_trips() -> None:

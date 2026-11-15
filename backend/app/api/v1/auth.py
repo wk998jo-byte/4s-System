@@ -124,6 +124,20 @@ def me(user: UserOut = Depends(get_current_user)) -> UserOut:
     return user
 
 
+@router.post("/auth/media-token")
+def refresh_media_token(user: UserOut = Depends(get_current_user)) -> dict:
+    """Issue a fresh attachment token for authenticated <img src> URLs.
+
+    Production rejects legacy ?access_token= on GET /uploads, so the SPA must
+    keep a valid media_token for the whole API session.
+    """
+    try:
+        token = platform_store.issue_media_token(user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {"media_token": token}
+
+
 @router.get("/admin/users")
 def list_users(user: UserOut = Depends(require_admin)) -> dict:
     del user

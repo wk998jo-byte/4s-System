@@ -32,8 +32,9 @@ class Settings(BaseSettings):
 
     # Server-side session lifetime (minutes). Validated on every auth check.
     session_ttl_minutes: int = Field(default=720, ge=5, le=60 * 24 * 30)
-    # Short-lived attachment-only tokens for <img src> (not full API sessions).
-    media_token_ttl_minutes: int = Field(default=120, ge=5, le=60 * 24)
+    # Attachment-only tokens for <img src> (not usable as API Bearer).
+    # Default matches session TTL so pictures keep working for the whole login.
+    media_token_ttl_minutes: int = Field(default=720, ge=5, le=60 * 24)
     # When false, GET /uploads rejects legacy ?access_token= (full session in URL).
     # Production defaults to false; development keeps true for older clients.
     allow_legacy_upload_access_token: bool | None = None
