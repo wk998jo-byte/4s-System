@@ -491,6 +491,36 @@ class PlatformStore:
                 "media_token": media_token,
             }
 
+    def issue_media_token(self, user_id: str) -> str:
+        """Mint a fresh attachment token for <img src> (replaces prior media tokens)."""
+        with self._lock, self._sessions() as session:
+            user = session.get(UserRow, user_id)
+            if not user or not user.is_active:
+                raise ValueError("User not found or inactive.")
+            now = datetime.now(timezone.utc)
+            media_ttl = max(5, int(get_settings().media_token_ttl_minutes))
+            for sibling in (
+                session.query(SessionRow)
+                .filter(
+                    SessionRow.user_id == user_id,
+                    SessionRow.purpose == "media",
+                )
+                .all()
+            ):
+                session.delete(sibling)
+            media_token = token_urlsafe(32)
+            session.add(
+                SessionRow(
+                    token=media_token,
+                    user_id=user_id,
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=media_ttl),
+                    purpose="media",
+                )
+            )
+            session.commit()
+            return media_token
+
     def logout(self, token: str) -> None:
         """Invalidate the given token and any sibling media tokens for that user."""
         with self._lock, self._sessions() as session:

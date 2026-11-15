@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { refreshMediaToken } from "../api/scc";
 import { request } from "../api/http";
 import { clearSession, getCachedUser, getToken, saveSession } from "./session";
 import type { AuthUser } from "./types";
@@ -30,16 +31,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    request<AuthUser>("/api/v1/auth/me")
-      .then((me) => {
-        saveSession(token, me);
+    void (async () => {
+      try {
+        const me = await request<AuthUser>("/api/v1/auth/me");
+        // Production /uploads rejects ?access_token= — refresh media_token every boot.
+        let media: string | null = null;
+        try {
+          media = await refreshMediaToken();
+        } catch {
+          media = null;
+        }
+        saveSession(token, me, media);
         setUser(me);
-      })
-      .catch(() => {
+      } catch {
         clearSession();
         setUser(null);
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   useEffect(() => {

@@ -43,7 +43,6 @@ import {
   moduleFromCategory,
   roleLabel,
   roleValue,
-  sampleAuditRows,
   type AdminTabId,
   type AuditRow,
 } from "../lib/adminData";
@@ -275,7 +274,7 @@ export function AdminScreen() {
   const [settings, setSettings] = useState<Record<string, unknown>>(DEFAULT_SETTINGS);
   const [settingsSaving, setSettingsSaving] = useState(false);
 
-  const [auditRows, setAuditRows] = useState<AuditRow[]>(() => sampleAuditRows());
+  const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [auditMod, setAuditMod] = useState("All");
   const [auditQ, setAuditQ] = useState("");
   const [auditPage, setAuditPage] = useState(0);
@@ -351,10 +350,9 @@ export function AdminScreen() {
       }
       try {
         const data = await fetchAuditLog(200);
-        const live = data.items.map((item) => mapAuditItem(item, list));
-        setAuditRows(live.length ? live : sampleAuditRows());
+        setAuditRows(data.items.map((item) => mapAuditItem(item, list)));
       } catch {
-        setAuditRows(sampleAuditRows());
+        setAuditRows([]);
       }
     })();
     void fetchPermissionMatrix()
@@ -756,8 +754,7 @@ export function AdminScreen() {
       notifyListsChanged();
       void fetchAuditLog(200)
         .then((data) => {
-          const live = data.items.map((row) => mapAuditItem(row, users));
-          setAuditRows(live.length ? live : sampleAuditRows());
+          setAuditRows(data.items.map((row) => mapAuditItem(row, users)));
         })
         .catch(() => undefined);
       showToast(`Deleted "${item.label}"`);
