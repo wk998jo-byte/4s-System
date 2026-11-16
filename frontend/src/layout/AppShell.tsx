@@ -631,9 +631,11 @@ export function AppShell({
                   const overdueAge = item.over_hours ?? Math.max(0, item.age_hours - (item.deadline_hours || 0));
                   const right = isReport
                     ? "Sign"
-                    : item.state === "soon"
-                      ? `${fmtNotifAge(item.left_hours ?? 0)} left`
-                      : `+${fmtNotifAge(overdueAge)}`;
+                    : item.state === "reject"
+                      ? "Returned"
+                      : item.state === "soon"
+                        ? `${fmtNotifAge(item.left_hours ?? 0)} left`
+                        : `+${fmtNotifAge(overdueAge)}`;
                   return (
                     <a
                       key={item.id}

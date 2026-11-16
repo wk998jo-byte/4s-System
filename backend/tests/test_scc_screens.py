@@ -299,6 +299,86 @@ def test_admin_list_add_is_read_from_database(tmp_path) -> None:
     assert isinstance(hw.get("department_counts"), dict)
 
 
+def test_reject_notifies_close_out_operator_only() -> None:
+    """Admin return → notification only for the operator who submitted close-out."""
+    from datetime import date, time
+
+    from app.schemas.auth import format_user_label
+    from app.schemas.scc import AiCameraCloseOut, AiCameraCreate
+
+    store = PlatformStore()
+    op = next(u for u in store.list_users() if u["role"] == "operator")
+    other = {
+        "id": "other-op",
+        "username": "other",
+        "display_name": "Other Op",
+        "badge_number": "O-999",
+        "role": "operator",
+        "projects": None,
+    }
+    closer = format_user_label(op["display_name"], op.get("badge_number"))
+    created = store.create_ai_camera(
+        AiCameraCreate(
+            project_id=store.catalog.get("project")[0]["id"],
+            location="Pad A",
+            occurred_on=date.today(),
+            occurred_time=time(11, 0),
+            alert_summary="Reject notice test",
+            alert_type_id=store.catalog.get("alert_type")[0]["id"],
+            category_id=store.catalog.get("ai_camera_category")[0]["id"],
+            risk_level_id=store.catalog.get("risk_level")[0]["id"],
+            detection_method_id=store.catalog.get("detection_method")[0]["id"],
+            reported_by="Someone Else",
+        )
+    )
+    closed = store.close_out_ai_camera(
+        created["id"],
+        AiCameraCloseOut(
+            hseo_name_badge="HSE / 1",
+            close_out_action="Fixed on site",
+            close_out_picture="fix.jpg",
+        ),
+        actor=closer,
+    )
+    assert closed is not None
+    rejected = store.reject_case(closed["id"], "Missing evidence photo", "A-001 - Admin")
+    assert rejected is not None
+    assert rejected["status"] == "open"
+    assert rejected["fields"]["reject_reason"] == "Missing evidence photo"
+
+    op_notes = store.overdue_notifications(op)
+    reject_items = [i for i in op_notes["items"] if i["state"] == "reject"]
+    assert len(reject_items) == 1
+    assert reject_items[0]["case_id"] == rejected["case_id"]
+    assert "Missing evidence photo" in reject_items[0]["detail"]
+    assert reject_items[0]["state_label"] == "Returned"
+
+    other_notes = store.overdue_notifications(other)
+    assert not any(i["state"] == "reject" for i in other_notes["items"])
+
+    admin = next(u for u in store.list_users() if u["role"] == "admin")
+    admin_notes = store.overdue_notifications(admin)
+    assert not any(i["state"] == "reject" for i in admin_notes["items"])
+
+    # Resubmit clears the return notice.
+    again = store.close_out_ai_camera(
+        rejected["id"],
+        AiCameraCloseOut(
+            hseo_name_badge="HSE / 1",
+            close_out_action="Evidence attached",
+            close_out_picture="fix2.jpg",
+        ),
+        actor=closer,
+    )
+    assert again is not None
+    assert not again["fields"].get("reject_reason")
+    cleared = store.overdue_notifications(op)
+    assert not any(
+        i["state"] == "reject" and i["case_id"] == rejected["case_id"]
+        for i in cleared["items"]
+    )
+
+
 def test_list_item_edit_and_delete_update_dropdowns(tmp_path) -> None:
     from datetime import date, time
 

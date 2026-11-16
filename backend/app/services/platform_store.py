@@ -1815,6 +1815,10 @@ class PlatformStore:
             record["fields"]["close_out_action"] = payload.close_out_action.strip()
             record["fields"]["close_out_picture"] = payload.close_out_picture.strip()
             record["fields"]["close_out_submitted_by"] = actor or "Operator"
+            # Resubmit after Admin return → clear prior reject notice.
+            record["fields"].pop("reject_reason", None)
+            record["fields"].pop("rejected_by", None)
+            record["fields"].pop("rejected_at", None)
             # Optional SafeLife at close-out: if provided, mark Updated.
             sl_ref = (getattr(payload, "safelife_reference", None) or "").strip()
             if sl_ref:
@@ -1860,6 +1864,10 @@ class PlatformStore:
             fields["confirmed_at"] = datetime.now(timezone.utc).isoformat()
             if actor:
                 fields["close_out_submitted_by"] = actor
+            # Resubmit after Admin return → clear prior reject notice.
+            fields.pop("reject_reason", None)
+            fields.pop("rejected_by", None)
+            fields.pop("rejected_at", None)
             record["status"] = "under_process"
 
         updated = self._patch_case(case_id, record_type, mutate)
@@ -2111,6 +2119,7 @@ class PlatformStore:
             fields = dict(row.fields or {})
             fields["reject_reason"] = reason
             fields["rejected_by"] = actor
+            fields["rejected_at"] = datetime.now(timezone.utc).isoformat()
             row.fields = fields
             flag_modified(row, "fields")
             session.commit()
@@ -5952,6 +5961,85 @@ class PlatformStore:
             return status == "open"
         return status == "open"
 
+    def _reject_notifications(self, user: dict | None) -> list[dict]:
+        """Notify only the operator who submitted close-out when Admin returns a case."""
+        if not user or user.get("role") != "operator":
+            return []
+        aliases = self._reporter_aliases(user)
+        if not aliases:
+            return []
+        type_labels = {
+            "ai_camera": "AI Camera Observation",
+            "dashcam": "Dashcam Observation",
+            "speed": "Speed Violation",
+            "sos": "SOS Alert",
+        }
+        now = datetime.now(timezone.utc)
+        items: list[dict] = []
+        for row in self.filter_cases_for_user(self.list_cases(), user):
+            if row.get("status") != "open":
+                continue
+            if row.get("record_type") not in {"ai_camera", "dashcam", "speed"}:
+                continue
+            fields = row.get("fields") or {}
+            if not isinstance(fields, dict):
+                continue
+            reason = str(fields.get("reject_reason") or "").strip()
+            if not reason:
+                continue
+            closer = str(fields.get("close_out_submitted_by") or "").strip()
+            if not self._reporter_matches(closer, aliases):
+                continue
+            rejected_by = str(fields.get("rejected_by") or "Admin").strip() or "Admin"
+            rejected_raw = fields.get("rejected_at") or row.get("created_at")
+            try:
+                if isinstance(rejected_raw, datetime):
+                    rejected_at = rejected_raw
+                else:
+                    rejected_at = datetime.fromisoformat(
+                        str(rejected_raw).replace("Z", "+00:00")
+                    )
+                if rejected_at.tzinfo is None:
+                    rejected_at = rejected_at.replace(tzinfo=timezone.utc)
+                age_h = max(0.0, (now - rejected_at).total_seconds() / 3600.0)
+            except (TypeError, ValueError):
+                age_h = 0.0
+            place = (
+                fields.get("location")
+                or row.get("project")
+                or row.get("department")
+                or "—"
+            )
+            items.append(
+                {
+                    "id": row["id"],
+                    "case_id": row["case_id"],
+                    "record_type": row["record_type"],
+                    "record_label": type_labels.get(
+                        row["record_type"], row["record_type"]
+                    ),
+                    "project": row.get("project"),
+                    "department": row.get("department"),
+                    "location": fields.get("location"),
+                    "risk_level": row.get("risk_level"),
+                    "risk_key": str(row.get("risk_level") or "Medium")
+                    .replace(" Risk", "")
+                    .strip()
+                    or "Medium",
+                    "status": row["status"],
+                    "status_label": "Open",
+                    "state": "reject",
+                    "state_label": "Returned",
+                    "detail": f"{place} · Returned by {rejected_by}: {reason}",
+                    "age_hours": round(age_h, 1),
+                    "over_hours": 0.0,
+                    "left_hours": 0.0,
+                    "deadline_hours": 0.0,
+                    "reported_by": closer,
+                }
+            )
+        return items
+
     def overdue_notifications(self, user: dict | None = None) -> dict:
         """Close-out deadline reminders (due soon), overdue, and 2× escalations."""
         settings = self.get_platform_settings()
@@ -6085,6 +6173,8 @@ class PlatformStore:
                     if item["state"] in {"soon", "over", "esc"}
                     and self._reporter_matches(str(item.get("reported_by") or ""), aliases)
                 ]
+                # Admin returned close-out → only the operator who submitted it.
+                items.extend(self._reject_notifications(user))
         elif role in {"receiver", "project_pm"}:
             items = self._pm_report_ready_notifications(user)
 
@@ -6096,6 +6186,7 @@ class PlatformStore:
                 "over": sum(1 for item in items if item["state"] == "over"),
                 "soon": sum(1 for item in items if item["state"] == "soon"),
                 "report": sum(1 for item in items if item["state"] == "report"),
+                "reject": sum(1 for item in items if item["state"] == "reject"),
                 "all": len(items),
             },
             "system_counts": system_counts,

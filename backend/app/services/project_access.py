@@ -1,7 +1,10 @@
-"""Fail-closed project authorization for hardware and report API paths.
+"""Project authorization for hardware and report API paths.
 
-Admin is the existing global role. Missing assignments are not a global grant.
-``None`` as the user is reserved for trusted, internal store callers.
+``None`` return value = unrestricted (admin, trusted internal callers, or
+operators with Admin UI “All projects”, stored as ``projects: null`` / ``[]``).
+
+A non-empty assignment list restricts to those project labels. A list that
+normalizes to no labels (e.g. blanks only) is fail-closed empty.
 """
 
 
@@ -9,9 +12,14 @@ def project_scope(user: dict | None) -> frozenset[str] | None:
     if user is None or user.get("role") == "admin":
         return None
     assigned = user.get("projects")
-    if not isinstance(assigned, list):
-        return frozenset()
-    return frozenset(p.strip() for p in assigned if isinstance(p, str) and p.strip())
+    # Product rule (Admin access dialog): null / empty = All projects.
+    if not isinstance(assigned, list) or len(assigned) == 0:
+        return None
+    cleaned = frozenset(
+        p.strip() for p in assigned if isinstance(p, str) and p.strip()
+    )
+    # Explicit list that cleaned to nothing → no authorized projects.
+    return cleaned
 
 
 def can_access_project(user: dict | None, project: object) -> bool:
