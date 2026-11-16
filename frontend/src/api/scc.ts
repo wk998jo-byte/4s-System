@@ -804,7 +804,7 @@ export type OverdueNotificationItem = {
   risk_key?: string;
   status?: string;
   status_label?: string;
-  state: "soon" | "over" | "esc" | "report" | string;
+  state: "soon" | "over" | "esc" | "report" | "reject" | string;
   state_label?: string;
   detail?: string;
   age_hours: number;

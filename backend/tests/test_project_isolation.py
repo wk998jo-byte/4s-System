@@ -186,18 +186,28 @@ def test_denied_direct_id_requests_never_modify_any_table(gate, identity, method
     assert database_snapshot(store) == before
 
 
-@pytest.mark.parametrize("identity", ["missing", "empty", "blank"])
-def test_missing_assignments_are_not_global_and_never_write(gate, identity):
+@pytest.mark.parametrize("identity", ["missing", "empty"])
+def test_null_or_empty_projects_mean_all_projects_access(gate, identity):
+    """Admin UI stores All projects as null/[]; operators must still load HW/dashboard."""
+    client, _, headers, _ = gate
+    for path in ("/hw", "/hw/register", "/hw/transfers", "/reports", "/dashboard/overview"):
+        assert client.get("/api/v1" + path, headers=headers[identity]).status_code == 200
+
+
+def test_blank_only_assignments_are_denied_and_never_write(gate):
     client, store, headers, objects = gate
     before = database_snapshot(store)
     for path in ("/hw", "/hw/register", "/hw/transfers", "/reports"):
-        assert client.get("/api/v1" + path, headers=headers[identity]).status_code == 403
+        assert client.get("/api/v1" + path, headers=headers["blank"]).status_code == 403
     for path in (
         f"/hw/transfers/{objects['transfer_Yanbu']['id']}/receive",
         f"/reports/{objects['monthly_Yanbu']['id']}/sign",
     ):
-        assert client.post("/api/v1" + path, headers=headers[identity],
-                           json={"signature_image": "test.png"}).status_code == 403
+        assert client.post(
+            "/api/v1" + path,
+            headers=headers["blank"],
+            json={"signature_image": "test.png"},
+        ).status_code == 403
     assert database_snapshot(store) == before
 
 
@@ -339,10 +349,22 @@ def test_report_notifications_follow_assignments(gate):
         notifications = method({"role": role, "projects": ["Yanbu"]})
         assert notifications
         assert all(n["project"] == "Yanbu" for n in notifications)
-        assert method({"role": role, "projects": None}) == []
+        # null = All projects → not restricted to an empty set
+        all_access = method({"role": role, "projects": None})
+        assert {n["project"] for n in all_access} >= {"Yanbu", "Jafurah"}
 
 
-@pytest.mark.parametrize("projects", [None, [], [""], "Yanbu", ["  "], [None, 1]])
-def test_only_admin_is_implicitly_global(projects):
-    assert project_scope({"role": "receiver", "projects": projects}) == frozenset()
+@pytest.mark.parametrize(
+    "projects,expected",
+    [
+        (None, None),
+        ([], None),
+        (["Yanbu"], frozenset({"Yanbu"})),
+        (["", "  "], frozenset()),
+        ("Yanbu", None),  # non-list treated like unset → All projects
+        ([None, 1], frozenset()),
+    ],
+)
+def test_project_scope_matches_admin_all_projects_rule(projects, expected):
+    assert project_scope({"role": "receiver", "projects": projects}) == expected
     assert project_scope({"role": "admin", "projects": projects}) is None
