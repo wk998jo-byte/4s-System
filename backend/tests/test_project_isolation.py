@@ -49,6 +49,8 @@ def gate(store, monkeypatch):
         "missing": ("receiver", None),
         "empty": ("receiver", []),
         "blank": ("receiver", ["", "  "]),
+        # Explicit All-projects sentinel (Admin UI All option).
+        "all_star": ("operator", ["*"]),
     }
     password = "DisposableScopeTest2026!"
     digest = hash_password(password)
@@ -186,29 +188,50 @@ def test_denied_direct_id_requests_never_modify_any_table(gate, identity, method
     assert database_snapshot(store) == before
 
 
-@pytest.mark.parametrize("identity", ["missing", "empty"])
-def test_null_or_empty_projects_mean_all_projects_access(gate, identity):
-    """Admin UI stores All projects as null/[]; operators must still load HW/dashboard."""
-    client, _, headers, _ = gate
-    for path in ("/hw", "/hw/register", "/hw/transfers", "/reports", "/dashboard/overview"):
-        assert client.get("/api/v1" + path, headers=headers[identity]).status_code == 200
-
-
-def test_blank_only_assignments_are_denied_and_never_write(gate):
+@pytest.mark.parametrize("identity", ["missing", "empty", "blank"])
+def test_missing_empty_or_blank_assignments_are_denied_and_never_write(gate, identity):
+    """null / [] / blanks are not a global grant — fail closed."""
     client, store, headers, objects = gate
     before = database_snapshot(store)
     for path in ("/hw", "/hw/register", "/hw/transfers", "/reports"):
-        assert client.get("/api/v1" + path, headers=headers["blank"]).status_code == 403
+        assert client.get("/api/v1" + path, headers=headers[identity]).status_code == 403
     for path in (
         f"/hw/transfers/{objects['transfer_Yanbu']['id']}/receive",
         f"/reports/{objects['monthly_Yanbu']['id']}/sign",
     ):
         assert client.post(
             "/api/v1" + path,
-            headers=headers["blank"],
+            headers=headers[identity],
             json={"signature_image": "test.png"},
         ).status_code == 403
+    # Direct-ID mutation must also stay denied.
+    assert (
+        client.post(
+            f"/api/v1/hw/transfers/{objects['transfer_Yanbu']['id']}/receive",
+            headers=headers[identity],
+        ).status_code
+        == 403
+    )
     assert database_snapshot(store) == before
+
+
+def test_explicit_all_projects_sentinel_retains_global_read(gate):
+    """Admin UI All-projects is stored as ['*'] and must keep HW/reports access."""
+    client, _, headers, objects = gate
+    for path in ("/hw", "/hw/register", "/hw/transfers", "/reports", "/dashboard/overview"):
+        assert client.get("/api/v1" + path, headers=headers["all_star"]).status_code == 200
+    hw = client.get("/api/v1/hw", headers=headers["all_star"]).json()
+    assert set(hw["project_counts"]) >= {"Yanbu", "Jafurah"}
+    register = client.get("/api/v1/hw/register", headers=headers["all_star"]).json()
+    assert {r["project"] for r in register["items"]} >= {"Yanbu", "Jafurah"}
+    # Yanbu-only PM cannot receive a Jafurah delivery by direct ID.
+    assert (
+        client.post(
+            f"/api/v1/hw/transfers/{objects['transfer_Jafurah']['id']}/receive",
+            headers=headers["pm_a"],
+        ).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize("bearer", [None, "Bearer invalid-fixture-token"])
@@ -349,22 +372,83 @@ def test_report_notifications_follow_assignments(gate):
         notifications = method({"role": role, "projects": ["Yanbu"]})
         assert notifications
         assert all(n["project"] == "Yanbu" for n in notifications)
-        # null = All projects → not restricted to an empty set
-        all_access = method({"role": role, "projects": None})
+        # Missing assignment is not a global grant.
+        assert method({"role": role, "projects": None}) == []
+        all_access = method({"role": role, "projects": ["*"]})
         assert {n["project"] for n in all_access} >= {"Yanbu", "Jafurah"}
 
 
 @pytest.mark.parametrize(
     "projects,expected",
     [
-        (None, None),
-        ([], None),
+        (None, frozenset()),
+        ([], frozenset()),
+        (["*"], None),
         (["Yanbu"], frozenset({"Yanbu"})),
         (["", "  "], frozenset()),
-        ("Yanbu", None),  # non-list treated like unset → All projects
+        ("Yanbu", frozenset()),  # non-list → fail closed
         ([None, 1], frozenset()),
     ],
 )
-def test_project_scope_matches_admin_all_projects_rule(projects, expected):
+def test_project_scope_distinguishes_explicit_all_from_missing(projects, expected):
     assert project_scope({"role": "receiver", "projects": projects}) == expected
     assert project_scope({"role": "admin", "projects": projects}) is None
+
+
+def test_legacy_null_migration_encodes_all_without_granting_post_flag_missing(store):
+    """One-time migration turns legacy null into ['*']; later null stays denied."""
+    from app.db.models import AppStateRow, UserRow
+    from app.services.auth import hash_password
+    from app.services.project_access import ALL_PROJECTS_SENTINEL
+
+    digest = hash_password("DisposableScopeTest2026!")
+    with store._lock, store._sessions() as session:
+        flag = session.get(AppStateRow, "projects_all_sentinel_v1")
+        if flag is not None:
+            session.delete(flag)
+        session.add(
+            UserRow(
+                id="legacy-null-op",
+                username="legacy-null-op",
+                display_name="Legacy Null",
+                role="operator",
+                projects=None,
+                password_hash=digest,
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    store._migrate_legacy_null_all_projects_v1()
+    with store._sessions() as session:
+        legacy = session.get(UserRow, "legacy-null-op")
+        assert legacy is not None
+        assert legacy.projects == [ALL_PROJECTS_SENTINEL]
+        assert session.get(AppStateRow, "projects_all_sentinel_v1") is not None
+
+    # New missing user after migration flag: stays null and is denied.
+    with store._lock, store._sessions() as session:
+        session.add(
+            UserRow(
+                id="post-mig-missing",
+                username="post-mig-missing",
+                display_name="Post Mig",
+                role="operator",
+                projects=None,
+                password_hash=digest,
+                is_active=True,
+            )
+        )
+        session.commit()
+    store._migrate_legacy_null_all_projects_v1()  # no-op once flagged
+    with store._sessions() as session:
+        post = session.get(UserRow, "post-mig-missing")
+        assert post is not None
+        assert post.projects is None
+    missing = {
+        "id": "post-mig-missing",
+        "role": "operator",
+        "projects": None,
+    }
+    assert project_scope(missing) == frozenset()
+    assert store.get_hw(user=missing)["project_counts"] == {}

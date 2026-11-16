@@ -1,24 +1,46 @@
 """Project authorization for hardware and report API paths.
 
-``None`` return value = unrestricted (admin, trusted internal callers, or
-operators with Admin UI “All projects”, stored as ``projects: null`` / ``[]``).
+``project_scope`` return values:
+- ``None`` — unrestricted (admin role, trusted internal ``user=None``, or
+  explicit All-projects assignment stored as ``["*"]``).
+- ``frozenset()`` — no authorized projects (missing / invalid assignment).
+- ``frozenset({...})`` — restricted to those project labels.
 
-A non-empty assignment list restricts to those project labels. A list that
-normalizes to no labels (e.g. blanks only) is fail-closed empty.
+Historical Admin UI saved All-projects as ``projects=null``. That is ambiguous
+with missing assignments. New writes use the ``*`` sentinel; a one-time store
+migration encodes legacy null/[] non-admin rows as ``["*"]``.
 """
+
+from __future__ import annotations
+
+# Stored in users.projects JSON to mean explicit All-projects (not missing).
+ALL_PROJECTS_SENTINEL = "*"
+
+
+def has_explicit_all_projects(projects: object) -> bool:
+    """True when the assignment list explicitly grants all projects."""
+    if not isinstance(projects, list):
+        return False
+    return any(
+        isinstance(item, str) and item.strip() == ALL_PROJECTS_SENTINEL
+        for item in projects
+    )
 
 
 def project_scope(user: dict | None) -> frozenset[str] | None:
     if user is None or user.get("role") == "admin":
         return None
     assigned = user.get("projects")
-    # Product rule (Admin access dialog): null / empty = All projects.
-    if not isinstance(assigned, list) or len(assigned) == 0:
+    if has_explicit_all_projects(assigned):
         return None
+    if not isinstance(assigned, list):
+        # Missing / non-list → fail closed (no global grant).
+        return frozenset()
     cleaned = frozenset(
-        p.strip() for p in assigned if isinstance(p, str) and p.strip()
+        p.strip()
+        for p in assigned
+        if isinstance(p, str) and p.strip() and p.strip() != ALL_PROJECTS_SENTINEL
     )
-    # Explicit list that cleaned to nothing → no authorized projects.
     return cleaned
 
 

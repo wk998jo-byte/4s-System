@@ -613,13 +613,14 @@ export function HwScreen() {
 
   const hasAllProjectAccess = useMemo(() => {
     if (user?.role === "admin") return true;
-    const scoped = user?.projects;
-    return !scoped || scoped.length === 0;
+    return Array.isArray(user?.projects) && user.projects.includes("*");
   }, [user?.role, user?.projects]);
 
   const accessProjects = useMemo((): string[] => {
     if (hasAllProjectAccess) return [...HW_PROJECTS];
-    const allowed = new Set((user?.projects || []).map(String));
+    const allowed = new Set(
+      (user?.projects || []).map(String).filter((p) => p && p !== "*"),
+    );
     return HW_PROJECTS.filter((p) => allowed.has(p));
   }, [hasAllProjectAccess, user?.projects]);
 

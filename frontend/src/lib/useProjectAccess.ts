@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { isAllProjectsAssignment } from "./projectAccess";
 import { useList } from "../screens/shared";
 
 /**
  * Project-access scope for dashboards / forms.
- * Admin or empty/null `user.projects` = all projects.
+ * Admin or explicit `projects: ["*"]` = all projects.
+ * null/[] = no assignment (not a global grant).
  * Otherwise filters are limited to the assigned project labels.
  */
 export function useProjectAccess(catalogProjects: readonly string[]) {
@@ -12,13 +14,16 @@ export function useProjectAccess(catalogProjects: readonly string[]) {
 
   const hasAllProjectAccess = useMemo(() => {
     if (user?.role === "admin") return true;
-    const scoped = user?.projects;
-    return !scoped || scoped.length === 0;
+    return isAllProjectsAssignment(user?.projects);
   }, [user?.role, user?.projects]);
 
   const accessProjects = useMemo(() => {
     if (hasAllProjectAccess) return catalogProjects;
-    const allowed = new Set((user?.projects || []).map(String));
+    const allowed = new Set(
+      (user?.projects || [])
+        .map(String)
+        .filter((p) => p && p !== "*"),
+    );
     const matched = catalogProjects.filter((p) => allowed.has(p));
     if (matched.length) return matched;
     return [...allowed];
