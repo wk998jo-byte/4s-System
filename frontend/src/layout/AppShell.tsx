@@ -293,8 +293,9 @@ export function AppShell({
   const accessLabel = useMemo(() => {
     if (user?.role === "admin") return "All projects";
     const projects = user?.projects;
-    if (!projects?.length) return "All projects";
-    return projects.join(" · ");
+    if (Array.isArray(projects) && projects.includes("*")) return "All projects";
+    if (!projects?.length) return "No projects assigned";
+    return projects.filter((p) => p !== "*").join(" · ") || "No projects assigned";
   }, [user?.role, user?.projects]);
 
   useEffect(() => {

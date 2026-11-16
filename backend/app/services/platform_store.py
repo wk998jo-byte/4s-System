@@ -42,9 +42,11 @@ from app.services.auth import (
 )
 from app.services.catalog import CONTACT_CATEGORIES, Catalog
 from app.services.project_access import (
+    ALL_PROJECTS_SENTINEL,
     can_access_project,
     can_view_report,
     can_view_transfer,
+    has_explicit_all_projects,
     project_scope,
 )
 from app.services.uploads import ensure_demo_image
@@ -328,6 +330,7 @@ class PlatformStore:
         self._migrate_ai_camera_locations_v1()
         self._seed_asset_classifications()
         self._seed_users()
+        self._migrate_legacy_null_all_projects_v1()
         self._ensure_sla_deadlines()
         self._seed_key_personnel_v1()
         self._seed_key_personnel_mgs_v2()
@@ -441,10 +444,47 @@ class PlatformStore:
         }
 
     def _normalize_projects(self, value) -> list[str] | None:
+        """Normalize project assignments.
+
+        ``None`` / empty → missing (deny for non-admin).
+        Explicit All-projects → ``["*"]``.
+        Otherwise a cleaned label list.
+        """
         if value is None:
             return None
-        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if not isinstance(value, list):
+            return None
+        if has_explicit_all_projects(value):
+            return [ALL_PROJECTS_SENTINEL]
+        cleaned = [
+            str(item).strip()
+            for item in value
+            if str(item).strip() and str(item).strip() != ALL_PROJECTS_SENTINEL
+        ]
         return cleaned or None
+
+    def _migrate_legacy_null_all_projects_v1(self) -> None:
+        """Encode legacy Admin-UI All-projects (null/[]) as explicit ``["*"]``.
+
+        Does not invent access for new accounts created after this flag is set:
+        those keep ``projects=null`` until an Admin assigns projects or All.
+        """
+        with self._lock, self._sessions() as session:
+            if session.get(AppStateRow, "projects_all_sentinel_v1") is not None:
+                return
+            changed = False
+            for row in session.query(UserRow).filter(UserRow.role != "admin").all():
+                projects = getattr(row, "projects", None)
+                if projects is None or (
+                    isinstance(projects, list) and len(projects) == 0
+                ):
+                    row.projects = [ALL_PROJECTS_SENTINEL]
+                    changed = True
+            session.add(AppStateRow(key="projects_all_sentinel_v1", value=True))
+            if changed:
+                session.commit()
+            else:
+                session.commit()
 
     def login(self, username: str, password: str) -> dict:
         with self._lock, self._sessions() as session:
@@ -2254,14 +2294,16 @@ class PlatformStore:
     ) -> list[dict]:
         if not user:
             return rows
-        allowed = user.get("projects")
-        if not allowed:
+        allowed = project_scope(user)
+        if allowed is None:
             return rows
-        allowed_set = {str(item) for item in allowed}
+        if not allowed:
+            # Missing / invalid assignment: only keep unscoped rows.
+            return [row for row in rows if not row.get("project")]
         return [
             row
             for row in rows
-            if not row.get("project") or row.get("project") in allowed_set
+            if not row.get("project") or row.get("project") in allowed
         ]
 
     def record_upload_owner(self, stored_name: str, user_id: str) -> None:
@@ -2405,11 +2447,12 @@ class PlatformStore:
         user: dict | None = None,
     ) -> dict:
         start, end = self.period_bounds(period, start_date, end_date)
-        allowed = user.get("projects") if user else None
-        allowed_set = {str(item) for item in allowed} if allowed else None
+        allowed_set = project_scope(user) if user else None
         # Unauthorized project filter must not fall back to all projects.
         denied_project = bool(
-            allowed_set and project and project not in allowed_set
+            allowed_set is not None
+            and project
+            and (not allowed_set or project not in allowed_set)
         )
         base_rows = self.filter_cases_for_user(self.list_cases(), user)
         if denied_project:
@@ -2464,10 +2507,12 @@ class PlatformStore:
             if row.get("department"):
                 by_department[row["department"]] = by_department.get(row["department"], 0) + 1
         weather = self._weather_summary(
-            view=view, project=project, allowed_projects=allowed_set
+            view=view,
+            project=project,
+            allowed_projects=set(allowed_set) if allowed_set is not None else None,
         )
         catalog_projects = [item["label"] for item in self.catalog.get("project")]
-        if allowed_set:
+        if allowed_set is not None:
             projects = [p for p in catalog_projects if p in allowed_set]
             if not projects:
                 projects = sorted(allowed_set)

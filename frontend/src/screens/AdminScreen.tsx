@@ -46,6 +46,11 @@ import {
   type AdminTabId,
   type AuditRow,
 } from "../lib/adminData";
+import {
+  ALL_PROJECTS_SENTINEL,
+  isAllProjectsAssignment,
+  projectAccessLabels,
+} from "../lib/projectAccess";
 import { formatUserLabel, LIST_LABEL } from "./shared";
 
 type AdminUser = {
@@ -618,17 +623,18 @@ export function AdminScreen() {
   }
 
   function openAccess(user: AdminUser) {
-    const all = !user.projects || user.projects.length === 0;
+    const all = isAllProjectsAssignment(user.projects);
     setAccessEdit(user);
     setAccessAll(all);
     // When "All projects" is on, keep the list empty so unticking it
     // starts from no selection instead of every project pre-checked.
-    setAccessSel(all ? [] : [...(user.projects || [])]);
+    setAccessSel(all ? [] : projectAccessLabels(user.projects));
   }
 
   async function saveAccess() {
     if (!accessEdit) return;
-    const projects = accessAll ? null : accessSel;
+    // Explicit All-projects sentinel — never ambiguous null/missing.
+    const projects = accessAll ? [ALL_PROJECTS_SENTINEL] : accessSel;
     if (!accessAll && !projects?.length) {
       showToast("Tick at least one project");
       return;
@@ -1194,7 +1200,8 @@ export function AdminScreen() {
                 </thead>
                 <tbody>
                   {users.map((u) => {
-                    const all = !u.projects || u.projects.length === 0;
+                    const all = isAllProjectsAssignment(u.projects);
+                    const labels = projectAccessLabels(u.projects);
                     return (
                       <tr key={u.id}>
                         <td>
@@ -1222,12 +1229,14 @@ export function AdminScreen() {
                           <div className="adm-access">
                             {all ? (
                               <span className="tagx green">All projects</span>
-                            ) : (
-                              u.projects?.map((p) => (
+                            ) : labels.length ? (
+                              labels.map((p) => (
                                 <span key={p} className="tagx">
                                   {p}
                                 </span>
                               ))
+                            ) : (
+                              <span className="tagx">None assigned</span>
                             )}
                             <button
                               type="button"

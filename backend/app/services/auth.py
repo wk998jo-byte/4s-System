@@ -124,7 +124,8 @@ SEED_USERS = [
         "display_name": "Operator",
         "badge_number": "O-001",
         "role": "operator",
-        "projects": None,
+        # Explicit All-projects sentinel (not ambiguous null).
+        "projects": ["*"],
     },
     {
         "username": "hse",
@@ -132,7 +133,7 @@ SEED_USERS = [
         "display_name": "Dept HSE",
         "badge_number": "H-001",
         "role": "dept_hse",
-        "projects": None,
+        "projects": ["*"],
     },
     {
         "username": "pm",
@@ -140,7 +141,7 @@ SEED_USERS = [
         "display_name": "Project PM",
         "badge_number": "P-001",
         "role": "receiver",
-        "projects": None,
+        "projects": ["*"],
     },
 ]
 
