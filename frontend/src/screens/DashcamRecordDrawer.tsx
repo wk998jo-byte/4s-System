@@ -11,6 +11,7 @@ import {
   type CaseDetail,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useIntegSettings } from "../lib/integSettings";
 import { RiskPill, StatusPill, useSignedInName } from "./shared";
@@ -287,6 +288,13 @@ export function DashcamRecordDrawer({
         ["Violation", field(row, "violation_type") || "—"],
         ["Risk level", row.risk_level || "—"],
         ["Reported by", field(row, "reported_by") || "—"],
+        [
+          "Uploaded by",
+          field(row, "uploaded_by") ||
+            field(row, "close_out_submitted_by") ||
+            "—",
+        ],
+        ["Closed by", field(row, "closed_by") || "—"],
       ]
     : [];
 
@@ -368,7 +376,7 @@ export function DashcamRecordDrawer({
                             }
                           }}
                         >
-                          <img src={p.src} alt={p.title} />
+                          <SecureMediaImg src={p.src} alt={p.title} />
                           <figcaption>
                             <b>{p.title}</b>
                             <span>{p.meta}</span>
@@ -559,7 +567,7 @@ export function DashcamRecordDrawer({
       {lightbox ? (
         <div className="lightbox" role="dialog" aria-label={lightbox.title} onClick={() => setLightbox(null)}>
           <div onClick={(e) => e.stopPropagation()}>
-            <img src={lightbox.src} alt={lightbox.title} />
+            <SecureMediaImg src={lightbox.src} alt={lightbox.title} />
             <p>
               {lightbox.title} · click anywhere to close
             </p>

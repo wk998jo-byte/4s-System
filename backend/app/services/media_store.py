@@ -130,16 +130,23 @@ class ReplitObjectMediaStore(MediaStore):
     def get_bytes(self, stored_name: str) -> bytes | None:
         client = self._get_client()
         key = self._object_key(stored_name)
-        try:
-            if not client.exists(key):
-                return None
-            return client.download_as_bytes(key)
-        except Exception:
-            # Some SDK versions raise instead of exists=False.
+        # Replit object storage can blip — retry once before 404.
+        for attempt in range(2):
             try:
+                if not client.exists(key):
+                    if attempt == 0:
+                        continue
+                    return None
                 return client.download_as_bytes(key)
             except Exception:
-                return None
+                # Some SDK versions raise instead of exists=False.
+                try:
+                    return client.download_as_bytes(key)
+                except Exception:
+                    if attempt == 0:
+                        continue
+                    return None
+        return None
 
     def exists(self, stored_name: str) -> bool:
         try:

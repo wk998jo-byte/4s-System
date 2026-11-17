@@ -16,6 +16,7 @@ import {
   type WeatherWeeklyLogDto,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { printReportRoot } from "../lib/reportPrint";
 import { useProjectAccess } from "../lib/useProjectAccess";
@@ -343,59 +344,42 @@ function scheduleFromSettings(settings?: Record<string, unknown> | null) {
   };
 }
 
+/** Keep only packs the viewer may see. All projects requires explicit grant in projectNames. */
+function packetVisibleToAccess(
+  scope: string,
+  projectNames: readonly string[],
+): boolean {
+  if (scope === "All projects") {
+    return projectNames.includes("All projects");
+  }
+  if (!projectNames.length) return false;
+  return projectNames.includes(scope);
+}
+
 export function buildDailyReports(
-  cases: CaseSummary[],
   packets: ReportPacket[] = [],
+  cases: CaseSummary[] = [],
+  projectNames: readonly string[] = [],
 ): BuiltReport[] {
-  const byDay = new Map<string, CaseSummary[]>();
-  for (const row of cases) {
-    const key = row.date?.slice(0, 10);
-    if (!key) continue;
-    const list = byDay.get(key) ?? [];
-    list.push(row);
-    byDay.set(key, list);
-  }
-  const packetByDay = new Map<string, ReportPacket>();
-  for (const packet of packets) {
-    if (packet.kind !== "daily") continue;
-    const day = (packet.a || packet.label || "").slice(0, 10);
-    if (day) packetByDay.set(day, packet);
-  }
-
   // Only persisted API packets are reports; the browser never invents periods.
-  const days = [...packetByDay.keys()].sort().reverse();
-
-  return days.map((day) => {
-    const rows = byDay.get(day) ?? [];
-    const packet = packetByDay.get(day);
-    const packetCompiling = Boolean(
-      packet && /compil|progress|scheduled/i.test(String(packet.status || "")),
-    );
-    const compiling = packetCompiling;
-    const noSource = packet?.status === "No source data";
-    const id = packet?.id || `DR-${day.replace(/-/g, "")}`;
-    return {
-      id,
-      kind: "daily" as const,
-      periodLabel: formatDay(day),
-      periodIso: day,
-      scope: packet?.scope || "All projects",
-      records: rows.length,
-      open: rows.filter((r) => r.status === "open").length,
-      underReview: rows.filter((r) => r.status === "under_process").length,
-      closed: rows.filter((r) => r.status === "closed").length,
-      overdue: rows.filter((r) => isOverdue(r)).length,
-      highRisk: rows.filter((r) => isHighRisk(r)).length,
-      generatedLabel: noSource ? "No source data" : compiling
-        ? "In progress"
-        : packet?.generated_at ? `${formatDay(packet.generated_at)} · auto` : "Not generated",
-      status: packet?.status || (compiling ? "Compiling" : "Not generated"),
-      statusTone: compiling ? "compiling" : "generated",
-      compiling,
-      cases: rows,
-      packet,
-    };
-  });
+  // One packet per day × scope (4 projects + All projects when authorized).
+  const dailyPackets = packets.filter((p) => p.kind === "daily");
+  return dailyPackets
+    .filter((p) => packetVisibleToAccess(p.scope, projectNames))
+    .sort(
+      (a, b) =>
+        String(b.a || "").localeCompare(String(a.a || "")) ||
+        a.scope.localeCompare(b.scope),
+    )
+    .map((p) => {
+      const day = (p.a || p.label || "").slice(0, 10);
+      const built = summarizeScoped("daily", p.id, p.scope, day, day, cases, p);
+      return {
+        ...built,
+        // Keep the single-day label (not a from–to range).
+        periodLabel: formatDay(day),
+      };
+    });
 }
 
 function casesInScope(
@@ -436,6 +420,15 @@ function monthlySignatureStatus(packet?: ReportPacket): string {
   return "Awaiting PM signature";
 }
 
+function weeklySignatureStatus(packet?: ReportPacket): string {
+  const hseSigned = Boolean(packet?.signed);
+  const adminSigned = Boolean(packet?.admin_signed);
+  if (hseSigned && adminSigned) return "Signed";
+  if (!hseSigned && !adminSigned) return "Awaiting signatures";
+  if (!hseSigned) return "Awaiting HSE signature";
+  return "Awaiting Admin signature";
+}
+
 function summarizeScoped(
   kind: ReportTab,
   id: string,
@@ -453,30 +446,41 @@ function summarizeScoped(
   const issued = Boolean(packet?.issued);
   const monthlyComplete =
     Boolean(packet?.signed) && Boolean(packet?.pm_signed);
+  const weeklyComplete =
+    Boolean(packet?.signed) && Boolean(packet?.admin_signed);
   const signed =
     kind === "monthly"
       ? monthlyComplete
-      : Boolean(packet?.signed) || /^signed$/i.test(packetStatus);
-  // Monthly status is always derived from who signed — never trust stale
-  // Issued / Ready to issue / Awaiting PM labels from older packets.
+      : kind === "weekly"
+        ? weeklyComplete
+        : Boolean(packet?.signed) || /^signed$/i.test(packetStatus);
+  // Weekly/monthly status is always derived from who signed — never trust stale labels.
   const status =
     noSource ? "No source data" : issued ? "Issued" : packetStatus === "Scheduled" ? "Scheduled" : kind === "monthly"
       ? compiling
         ? "Compiling"
         : monthlySignatureStatus(packet)
+      : kind === "weekly"
+        ? compiling
+          ? "Compiling"
+          : weeklySignatureStatus(packet)
       : compiling
         ? "Compiling"
         : packet?.status || "Generated";
   const awaiting =
     kind === "monthly"
       ? !compiling && !noSource && !issued && !monthlyComplete
-      : /awaiting/i.test(packetStatus) &&
-        !(packet?.signed || /^signed$/i.test(packetStatus));
+      : kind === "weekly"
+        ? !compiling && !noSource && !weeklyComplete
+        : /awaiting/i.test(packetStatus) &&
+          !(packet?.signed || /^signed$/i.test(packetStatus));
   const a = new Date(`${fromIso}T00:00:00`);
   const periodLabel =
     kind === "monthly"
       ? `${MONTH_FULL[a.getMonth()]} ${a.getFullYear()}`
-      : `${formatDay(fromIso)} – ${formatDay(toIso)}`;
+      : kind === "daily"
+        ? formatDay(fromIso)
+        : `${formatDay(fromIso)} – ${formatDay(toIso)}`;
   return {
     id,
     kind,
@@ -504,7 +508,7 @@ function summarizeScoped(
     compiling,
     cases: rows,
     packet:
-      kind === "monthly" && packet
+      (kind === "monthly" || kind === "weekly") && packet
         ? {
             ...packet,
             status,
@@ -520,7 +524,8 @@ export function buildWeeklyReports(
   projectNames: readonly string[],
 ): BuiltReport[] {
   const weeklyPackets = packets.filter((p) => p.kind === "weekly");
-  return weeklyPackets.filter((p) => !projectNames.length || projectNames.includes(p.scope))
+  return weeklyPackets
+    .filter((p) => packetVisibleToAccess(p.scope, projectNames))
     .sort((a, b) => b.a.localeCompare(a.a) || a.scope.localeCompare(b.scope))
     .map((p) => summarizeScoped("weekly", p.id, p.scope, p.a, p.b, cases, p));
 }
@@ -531,14 +536,21 @@ export function buildMonthlyReports(
   projectNames: readonly string[],
 ): BuiltReport[] {
   const monthlyPackets = packets.filter((p) => p.kind === "monthly");
-  return monthlyPackets.filter((p) => !projectNames.length || projectNames.includes(p.scope))
+  return monthlyPackets
+    .filter((p) => packetVisibleToAccess(p.scope, projectNames))
     .sort((a, b) => b.a.localeCompare(a.a) || a.scope.localeCompare(b.scope))
     .map((p) => summarizeScoped("monthly", p.id, p.scope, p.a, p.b, cases, p));
 }
 
 export function generatedReportCount(reports: BuiltReport[]): number {
   return reports.filter((r) => r.status !== "No source data" && !r.compiling &&
-    Boolean(r.packet?.generated_at || r.packet?.signed || r.packet?.pm_signed || r.packet?.issued)).length;
+    Boolean(
+      r.packet?.generated_at ||
+        r.packet?.signed ||
+        r.packet?.pm_signed ||
+        r.packet?.admin_signed ||
+        r.packet?.issued,
+    )).length;
 }
 
 function typeStats(cases: CaseSummary[]) {
@@ -831,13 +843,20 @@ function ReportViewer({
     return () => URL.revokeObjectURL(url);
   }, [sigFile]);
 
-  const canSignWeekly =
+  const weeklyAwaiting =
+    report.kind === "weekly" && /awaiting/i.test(report.status);
+  const canSignWeeklyHse =
     signMode &&
-    /awaiting/i.test(report.status) &&
-    report.kind === "weekly" &&
+    weeklyAwaiting &&
     !report.packet?.signed &&
     user?.role === "dept_hse" &&
-    Boolean(user.capabilities.sign_reports);
+    Boolean(user.capabilities.sign_reports || user.capabilities.sign_weekly_reports);
+  const canSignWeeklyAdmin =
+    signMode &&
+    weeklyAwaiting &&
+    !report.packet?.admin_signed &&
+    user?.role === "admin" &&
+    Boolean(user.capabilities.sign_weekly_reports);
   const monthlyAwaiting =
     report.kind === "monthly" && /awaiting/i.test(report.status);
   const canSignMonthlyHse =
@@ -852,7 +871,11 @@ function ReportViewer({
     !report.packet?.pm_signed &&
     (user?.role === "receiver" || user?.role === "project_pm") &&
     Boolean(user.capabilities.sign_monthly_reports);
-  const canSignHere = canSignWeekly || canSignMonthlyHse || canSignMonthlyPm;
+  const canSignHere =
+    canSignWeeklyHse ||
+    canSignWeeklyAdmin ||
+    canSignMonthlyHse ||
+    canSignMonthlyPm;
 
   async function submitSignature() {
     if (!canSignHere || !sigFile || signing) return;
@@ -871,6 +894,9 @@ function ReportViewer({
 
   const weeklySignedImageUrl = isSignatureImage(report.packet?.signed?.signature)
     ? resolveMediaUrl(report.packet?.signed?.signature)
+    : null;
+  const adminSignedImageUrl = isSignatureImage(report.packet?.admin_signed?.signature)
+    ? resolveMediaUrl(report.packet?.admin_signed?.signature)
     : null;
   const pmSignedImageUrl = isSignatureImage(report.packet?.pm_signed?.signature)
     ? resolveMediaUrl(report.packet?.pm_signed?.signature)
@@ -893,7 +919,7 @@ function ReportViewer({
     report.kind === "monthly"
       ? `[PM name], ${report.scope} Project`
       : report.kind === "weekly"
-        ? "Dept HSE"
+        ? "Dept HSE · Admin"
         : "SCC Supervisor";
   const subtitlePeriod =
     report.kind === "monthly" ? report.periodLabel : formatDay(report.periodIso);
@@ -925,16 +951,14 @@ function ReportViewer({
         ? "Monthly Report"
         : "Daily Report";
   const hseSigned = Boolean(report.packet?.signed);
+  const adminSigned = Boolean(report.packet?.admin_signed);
   const pmSigned = Boolean(report.packet?.pm_signed);
   const hseReviewerName = report.packet?.signed?.by || "Dept HSE";
+  const adminReviewerName = report.packet?.admin_signed?.by || "Admin";
   const pmReviewerName = report.packet?.pm_signed?.by || "Project PM";
-  const weeklyReviewerName = report.packet?.signed?.by || "Dept HSE";
   const hseReviewerStatus = hseSigned ? "Signed" : "Awaiting Dept HSE signature";
+  const adminReviewerStatus = adminSigned ? "Signed" : "Awaiting Admin signature";
   const pmReviewerStatus = pmSigned ? "Signed" : "Awaiting Project PM signature";
-  const weeklyIsSigned = Boolean(report.packet?.signed);
-  const weeklyReviewerStatus = weeklyIsSigned
-    ? "Signed"
-    : "Awaiting Dept HSE signature";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1027,7 +1051,7 @@ function ReportViewer({
                           <th>Prepared by</th>
                           <td>BQCL SCC Team</td>
                         </tr>
-                        {report.kind === "monthly" ? (
+                        {report.kind === "monthly" || report.kind === "weekly" ? (
                           <tr>
                             <th>Prepared by</th>
                             <td>
@@ -1040,7 +1064,7 @@ function ReportViewer({
                             <td>
                               <div className="report-cover-sig-slot">
                                 {hseSigned && weeklySignedImageUrl ? (
-                                  <img
+                                  <SecureMediaImg
                                     className="report-signature-img"
                                     src={weeklySignedImageUrl}
                                     alt="Dept HSE signature"
@@ -1050,20 +1074,41 @@ function ReportViewer({
                                 <small>{hseReviewerStatus}</small>
                               </div>
                             </td>
-                            <th>Review By — Project PM</th>
-                            <td>
-                              <div className="report-cover-sig-slot">
-                                {pmSigned && pmSignedImageUrl ? (
-                                  <img
-                                    className="report-signature-img"
-                                    src={pmSignedImageUrl}
-                                    alt="Project PM signature"
-                                  />
-                                ) : null}
-                                <span>{pmReviewerName}</span>
-                                <small>{pmReviewerStatus}</small>
-                              </div>
-                            </td>
+                            {report.kind === "monthly" ? (
+                              <>
+                                <th>Review By — Project PM</th>
+                                <td>
+                                  <div className="report-cover-sig-slot">
+                                    {pmSigned && pmSignedImageUrl ? (
+                                      <SecureMediaImg
+                                        className="report-signature-img"
+                                        src={pmSignedImageUrl}
+                                        alt="Project PM signature"
+                                      />
+                                    ) : null}
+                                    <span>{pmReviewerName}</span>
+                                    <small>{pmReviewerStatus}</small>
+                                  </div>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <th>Review By — Admin</th>
+                                <td>
+                                  <div className="report-cover-sig-slot">
+                                    {adminSigned && adminSignedImageUrl ? (
+                                      <SecureMediaImg
+                                        className="report-signature-img"
+                                        src={adminSignedImageUrl}
+                                        alt="Admin signature"
+                                      />
+                                    ) : null}
+                                    <span>{adminReviewerName}</span>
+                                    <small>{adminReviewerStatus}</small>
+                                  </div>
+                                </td>
+                              </>
+                            )}
                           </tr>
                         ) : (
                           <tr>
@@ -1071,37 +1116,14 @@ function ReportViewer({
                             <td colSpan={2}>
                               <div className="report-cover-sig-slot">
                                 <span>BQCL SCC Team</span>
-                                <small>
-                                  {report.kind === "daily" ? "Auto-compiled" : "System compiled"}
-                                </small>
+                                <small>Auto-compiled</small>
                               </div>
                             </td>
-                            <th colSpan={1}>
-                              {report.kind === "weekly"
-                                ? "Review By — HSE Dept."
-                                : "Review By — SCC Supervisor"}
-                            </th>
+                            <th colSpan={1}>Review By — SCC Supervisor</th>
                             <td colSpan={1}>
                               <div className="report-cover-sig-slot">
-                                {report.kind === "weekly" &&
-                                weeklyIsSigned &&
-                                weeklySignedImageUrl ? (
-                                  <img
-                                    className="report-signature-img"
-                                    src={weeklySignedImageUrl}
-                                    alt="Digital signature"
-                                  />
-                                ) : null}
-                                <span>
-                                  {report.kind === "weekly"
-                                    ? weeklyReviewerName
-                                    : "SCC Supervisor"}
-                                </span>
-                                <small>
-                                  {report.kind === "weekly"
-                                    ? weeklyReviewerStatus
-                                    : "Auto-compiled"}
-                                </small>
+                                <span>SCC Supervisor</span>
+                                <small>Auto-compiled</small>
                               </div>
                             </td>
                           </tr>
@@ -1450,7 +1472,7 @@ function ReportViewer({
                       </p>
                       {img ? (
                         <div className="report-obs-photo">
-                          <img src={img} alt={`${row.case_id} evidence`} />
+                          <SecureMediaImg src={img} alt={`${row.case_id} evidence`} />
                         </div>
                       ) : (
                         <p className="report-truncation-note">No picture attached to this record.</p>
@@ -1595,7 +1617,7 @@ export function ReportsScreen({
     [data?.settings],
   );
   const catalogProjects = useMemo(() => {
-    // Catalog projects from the reports payload (always one monthly per project).
+    // Catalog projects from the reports payload (real project labels only).
     const fromSummary = (data?.by_project ?? [])
       .map((row) => String(row.project || "").trim())
       .filter(Boolean);
@@ -1603,21 +1625,27 @@ export function ReportsScreen({
     return [
       ...new Set(
         packets
-          .filter((p) => p.kind === "monthly" && p.scope)
+          .filter(
+            (p) =>
+              p.kind === "monthly" &&
+              p.scope &&
+              p.scope !== "All projects",
+          )
           .map((p) => String(p.scope).trim()),
       ),
     ];
   }, [data?.by_project, packets]);
-  // Weekly/monthly only — daily stays all-project for every operator.
+  // Daily / weekly / monthly: scoped users see assigned projects only;
+  // unrestricted users also see the All-projects pack.
   const projectAccess = useProjectAccess(catalogProjects);
   const projectNames = useMemo(() => {
     if (projectAccess.isProjectScoped) return projectAccess.accessProjects;
-    return catalogProjects;
+    return [...catalogProjects, "All projects"];
   }, [projectAccess.isProjectScoped, projectAccess.accessProjects, catalogProjects]);
 
   const daily = useMemo(
-    () => buildDailyReports(cases, packets),
-    [cases, packets],
+    () => buildDailyReports(packets, cases, projectNames),
+    [packets, cases, projectNames],
   );
   const weekly = useMemo(
     () => buildWeeklyReports(packets, cases, projectNames),
@@ -1675,10 +1703,13 @@ export function ReportsScreen({
       setDailyWeatherLoaded(false);
       return;
     }
+    // Per-project daily → that project only; All projects → catalog projects.
     const projects =
-      projectNames.length > 0
-        ? projectNames
-        : ["Jafurah", "MGS", "Yanbu", "Ras Tanura"];
+      viewing.scope && viewing.scope !== "All projects"
+        ? [viewing.scope]
+        : catalogProjects.length > 0
+          ? catalogProjects
+          : ["Jafurah", "MGS", "Yanbu", "Ras Tanura"];
     let cancelled = false;
     setDailyWeatherLoaded(false);
     Promise.all(
@@ -1701,7 +1732,7 @@ export function ReportsScreen({
     return () => {
       cancelled = true;
     };
-  }, [viewing, projectNames]);
+  }, [viewing, catalogProjects]);
 
   const viewingMonthlyWeather = useMemo(() => {
     if (!viewing || viewing.kind !== "monthly") return [];
@@ -1730,7 +1761,7 @@ export function ReportsScreen({
           </h1>
           <p>
             Auto-generated daily, weekly and monthly <i>•</i> Weekly signed by Dept
-            HSE <i>•</i> Monthly signed by Dept HSE &amp; Project PM
+            HSE &amp; Admin <i>•</i> Monthly signed by Dept HSE &amp; Project PM
           </p>
         </div>
       </section>
@@ -1741,19 +1772,19 @@ export function ReportsScreen({
           <div className="v" style={{ fontSize: 18 }}>
             System compiles the daily log
           </div>
-          <div className="s">Every record registered that day · all projects</div>
+          <div className="s">One pack per project + All projects · same day</div>
         </article>
         <article className="v1-kpi">
           <div className="t">Weekly · {schedule.weeklyDay}</div>
           <div className="v" style={{ fontSize: 18 }}>
-            Weekly log compiled per project
+            Weekly log compiled per project + All
           </div>
           <div className="s">Daily logs + weekly weather log · Sunday to Saturday</div>
         </article>
         <article className="v1-kpi">
           <div className="t">Sign-off</div>
           <div className="v" style={{ fontSize: 18 }}>
-            Dept HSE signs the weekly report
+            Dept HSE &amp; Admin sign weekly
           </div>
           <div className="s">
             {awaitingSign} weekly report{awaitingSign === 1 ? "" : "s"} awaiting signature
@@ -1842,9 +1873,19 @@ export function ReportsScreen({
                     <td>
                       <div className="report-status-cell">
                         <span className={`report-status ${row.statusTone}`}>{row.status}</span>
-                        {row.kind === "weekly" && row.packet?.signed?.at ? (
+                        {row.kind === "weekly" &&
+                        (row.packet?.signed?.at || row.packet?.admin_signed?.at) ? (
                           <small className="report-signed-at muted">
-                            {formatDay(row.packet.signed.at)}
+                            {[
+                              row.packet?.signed?.at
+                                ? `HSE ${formatDay(row.packet.signed.at)}`
+                                : null,
+                              row.packet?.admin_signed?.at
+                                ? `Admin ${formatDay(row.packet.admin_signed.at)}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </small>
                         ) : null}
                         {row.kind === "monthly" &&
@@ -1877,11 +1918,29 @@ export function ReportsScreen({
                         row.statusTone === "awaiting" &&
                         !row.packet?.signed &&
                         user?.role === "dept_hse" &&
-                        user.capabilities.sign_reports ? (
+                        (user.capabilities.sign_reports ||
+                          user.capabilities.sign_weekly_reports) ? (
                           <button
                             type="button"
                             className="btn sm primary"
                             title="Open report to upload signature and sign as Dept HSE"
+                            onClick={() => {
+                              setSigningReportId(row.id);
+                              setViewing(row);
+                            }}
+                          >
+                            Sign
+                          </button>
+                        ) : null}
+                        {row.kind === "weekly" &&
+                        row.statusTone === "awaiting" &&
+                        !row.packet?.admin_signed &&
+                        user?.role === "admin" &&
+                        user.capabilities.sign_weekly_reports ? (
+                          <button
+                            type="button"
+                            className="btn sm primary"
+                            title="Open report to upload signature and sign as Admin"
                             onClick={() => {
                               setSigningReportId(row.id);
                               setViewing(row);

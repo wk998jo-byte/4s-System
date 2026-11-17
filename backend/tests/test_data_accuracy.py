@@ -69,15 +69,17 @@ def test_empty_inventory_transfers_reports_and_dashboard(store):
 
 
 def test_legacy_empty_calendar_packets_are_retained_not_completed(store):
+    projects = ["Jafurah", "Yanbu", "MGS", "Ras Tanura"]
     old = [
-        *store._rebuild_daily_packets([]),
-        *store._rebuild_weekly_packets([], ["Jafurah", "Yanbu", "MGS", "Ras Tanura"]),
-        *store._rebuild_monthly_packets([], ["Jafurah", "Yanbu", "MGS", "Ras Tanura"]),
+        *store._rebuild_daily_packets([], projects),
+        *store._rebuild_weekly_packets([], projects),
+        *store._rebuild_monthly_packets([], projects),
     ]
-    assert len(old) == 78
+    # 30 days × 5 scopes + 6 weeks × 5 + 6 months × 5
+    assert len(old) == 210
     store._save_report_packets(old)
     reports = store.reports()
-    assert len(reports["packets"]) == 78
+    assert len(reports["packets"]) == 210
     assert {p["id"] for p in reports["packets"]} == {p["id"] for p in old}
     assert {p["status"] for p in reports["packets"]} == {"No source data"}
     assert reports["report_counts"]["generated"] == {"daily": 0, "weekly": 0, "monthly": 0}
@@ -85,19 +87,23 @@ def test_legacy_empty_calendar_packets_are_retained_not_completed(store):
     with pytest.raises(ValueError, match="not been generated"):
         store.sign_report(old[30]["id"], actor="Test HSE", signature="test.png", role="dept_hse")
     with store._sessions() as session:
-        assert len(session.get(AppStateRow, "report_packets").value) == 78
+        assert len(session.get(AppStateRow, "report_packets").value) == 210
 
 
 def test_real_data_compiles_only_matching_periods_and_persists_counts(store):
     add_case(store)
     reports = store.reports()
     packets = reports["packets"]
-    assert len(packets) == 3  # one active day, week and month; no empty calendar filler
+    # One active day/week/month × (project + All projects); no empty calendar filler.
+    assert len(packets) == 6
     assert {p["kind"] for p in packets} == {"daily", "weekly", "monthly"}
-    assert next(p for p in packets if p["kind"] == "daily")["status"] == "Generated"
-    assert next(p for p in packets if p["kind"] == "weekly")["status"] == "Awaiting HSE signature"
-    assert next(p for p in packets if p["kind"] == "monthly")["status"] == "Compiling"
-    assert reports["report_counts"]["generated"] == {"daily": 1, "weekly": 1, "monthly": 0}
+    assert {p["scope"] for p in packets} == {"Jafurah", "All projects"}
+    assert all(p["status"] == "Generated" for p in packets if p["kind"] == "daily")
+    assert all(
+        p["status"] == "Awaiting signatures" for p in packets if p["kind"] == "weekly"
+    )
+    assert all(p["status"] == "Compiling" for p in packets if p["kind"] == "monthly")
+    assert reports["report_counts"]["generated"] == {"daily": 2, "weekly": 2, "monthly": 0}
     with store._sessions() as session:
         assert session.get(AppStateRow, "report_packets").value == packets
     assert store.reports()["packets"] == packets
@@ -119,13 +125,18 @@ def test_empty_calendar_periods_never_send_compile_notifications(store, monkeypa
 
 def test_daily_cutoff_and_monthly_signatures_remain_functional(store, monkeypatch):
     add_case(store, day=date(2026, 11, 15))
-    current = next(p for p in store.reports()["packets"] if p["kind"] == "daily")
-    assert current["status"] == "Compiling"
+    dailies = [p for p in store.reports()["packets"] if p["kind"] == "daily"]
+    assert dailies
+    assert all(p["status"] == "Compiling" for p in dailies)
     monkeypatch.setattr(store, "_report_local_now", lambda: datetime(2026, 11, 15, 23, 59, tzinfo=AST))
-    current = next(p for p in store.reports()["packets"] if p["kind"] == "daily")
-    assert current["status"] == "Generated"
+    dailies = [p for p in store.reports()["packets"] if p["kind"] == "daily"]
+    assert all(p["status"] == "Generated" for p in dailies)
     add_case(store, day=date(2026, 10, 25))
-    monthly = next(p for p in store.reports()["packets"] if p["kind"] == "monthly" and p["a"] == "2026-10-01")
+    monthly = next(
+        p
+        for p in store.reports()["packets"]
+        if p["kind"] == "monthly" and p["a"] == "2026-10-01" and p["scope"] == "Jafurah"
+    )
     first = store.sign_report(monthly["id"], actor="Test HSE", signature="hse.png", role="dept_hse")
     assert first["status"] == "Awaiting PM signature"
     signed = store.sign_report(monthly["id"], actor="Test PM", signature="pm.png", role="receiver")
@@ -137,12 +148,47 @@ def test_weekly_signature_and_scoped_reports_remain_functional(store):
     add_case(store)
     add_case(store, project="Yanbu")
     packets = store.reports(user={"projects": ["Yanbu"]})["packets"]
-    assert all(p["kind"] == "daily" or p["scope"] == "Yanbu" for p in packets)
+    # Scoped users see Yanbu packs only — never All projects.
+    assert packets
+    assert all(p["scope"] == "Yanbu" for p in packets)
     weekly = next(p for p in packets if p["kind"] == "weekly")
-    with pytest.raises(ValueError, match="Only Dept HSE"):
+    with pytest.raises(ValueError, match="Only Dept HSE or Admin"):
         store.sign_report(weekly["id"], actor="Test PM", signature="pm.png", role="receiver")
-    signed = store.sign_report(weekly["id"], actor="Test HSE", signature="hse.png", role="dept_hse")
+    hse = store.sign_report(weekly["id"], actor="Test HSE", signature="hse.png", role="dept_hse")
+    assert hse["status"] == "Awaiting Admin signature"
+    assert hse.get("signed")
+    assert not hse.get("admin_signed")
+    signed = store.sign_report(
+        weekly["id"], actor="Test Admin", signature="admin.png", role="admin"
+    )
     assert signed["status"] == "Signed"
+    assert signed.get("admin_signed")
+
+
+def test_admin_gets_weekly_report_sign_notifications(store):
+    add_case(store)
+    store.reports()  # compile packets
+    admin = {"role": "admin", "projects": ["*"]}
+    notes = store.overdue_notifications(admin)
+    report_notes = [n for n in notes["items"] if n["state"] == "report"]
+    assert report_notes
+    assert all(n["record_label"] == "Weekly report" for n in report_notes)
+    assert notes["counts"]["report"] == len(report_notes)
+    # After Admin signs every weekly pack, report notices clear for Admin.
+    for packet in store.reports()["packets"]:
+        if packet.get("kind") != "weekly":
+            continue
+        if not packet.get("signed"):
+            store.sign_report(
+                packet["id"], actor="Test HSE", signature="hse.png", role="dept_hse"
+            )
+        if not packet.get("admin_signed"):
+            store.sign_report(
+                packet["id"], actor="Test Admin", signature="admin.png", role="admin"
+            )
+    cleared = store.overdue_notifications(admin)
+    assert cleared["counts"]["report"] == 0
+    assert all(n["state"] != "report" for n in cleared["items"])
 
 
 def test_weekly_compiling_is_not_signable(store):
@@ -157,7 +203,8 @@ def test_signed_and_issued_history_survives_empty_source_and_old_windows(store):
     stamp = {"by": "Test HSE", "signature": "signature.png", "at": "2020-01-01T00:00:00Z"}
     old = [
         {"id": "WR-ARCHIVE", "kind": "weekly", "scope": "Jafurah", "a": "2020-01-01",
-         "b": "2020-01-07", "status": "Signed", "signed": stamp, "label": "Archive"},
+         "b": "2020-01-07", "status": "Signed", "signed": stamp, "admin_signed": stamp,
+         "label": "Archive"},
         {"id": "MR-ARCHIVE", "kind": "monthly", "scope": "Jafurah", "a": "2020-01-01",
          "b": "2020-01-31", "status": "Issued", "signed": stamp, "pm_signed": stamp,
          "issued": {"by": "Test admin", "at": "2020-02-01"}, "label": "Archive"},
@@ -181,8 +228,8 @@ def test_weather_only_reports_use_real_readings_not_station_definitions(store):
         session.add(weather_row("actual", date(2026, 11, 10), status="ok", temp_c=0))
         session.commit()
     packets = store.reports()["packets"]
-    assert len(packets) == 3
-    assert next(p for p in packets if p["kind"] == "daily")["a"] == "2026-11-10"
+    assert len(packets) == 6  # daily/weekly/monthly × (Jafurah + All)
+    assert {p["a"] for p in packets if p["kind"] == "daily"} == {"2026-11-10"}
 
 
 def test_register_and_inventory_round_trip(store):

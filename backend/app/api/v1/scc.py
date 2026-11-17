@@ -8,6 +8,7 @@ from app.schemas.auth import ConfirmDelete, RejectBody, UserOut, actor_label
 from app.schemas.scc import (
     AiCameraCloseOut,
     AiCameraCreate,
+    AiCameraSafelifeUpdate,
     CaseAdminUpdate,
     CaseDetail,
     CaseList,
@@ -365,6 +366,24 @@ def close_out_ai_camera(
     if not row:
         raise HTTPException(status_code=404, detail="AI Camera observation not found.")
     return row
+
+
+@router.post("/ai-camera-observations/{case_id}/safelife", response_model=CaseDetail)
+def set_ai_camera_safelife(
+    case_id: str,
+    payload: AiCameraSafelifeUpdate,
+    user: UserOut = Depends(require_capability("close_out")),
+):
+    """Optional SafeLife reference — allowed even after Admin closes the case."""
+    try:
+        row = platform_store.set_ai_camera_safelife(
+            case_id, payload, actor=actor_label(user)
+        )
+    except ValueError as exc:
+        _http_value_error(exc)
+    if not row:
+        raise HTTPException(status_code=404, detail="AI Camera observation not found.")
+    return as_detail(row)
 
 
 @router.post("/dashcam-observations/{case_id}/confirm-driver")
@@ -949,10 +968,26 @@ def sign_report(
     packet = _authorized_report(user, report_id)
     kind = packet.get("kind")
     if kind == "weekly":
-        if not user.capabilities.get("sign_reports") or user.role != "dept_hse":
+        # Weekly co-sign: Dept HSE + Admin (separate signature slots).
+        if user.role == "dept_hse":
+            if not (
+                user.capabilities.get("sign_reports")
+                or user.capabilities.get("sign_weekly_reports")
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Signing weekly reports as Dept HSE requires report signing permission.",
+                )
+        elif user.role == "admin":
+            if not user.capabilities.get("sign_weekly_reports"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Signing weekly reports requires Admin permission.",
+                )
+        else:
             raise HTTPException(
                 status_code=403,
-                detail="Signing weekly reports requires the Dept HSE role.",
+                detail="Signing weekly reports requires Dept HSE or Admin.",
             )
     elif kind == "monthly":
         # Both Dept HSE and Project PM sign monthly packs (separate signature slots).

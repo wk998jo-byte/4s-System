@@ -7,10 +7,12 @@ import {
   notifyCasesChanged,
   rejectCase,
   resolveMediaUrl,
+  setAiCameraSafelife,
   uploadImage,
   type CaseDetail,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { safelifeStatusOf } from "../lib/integSettings";
 import { RiskPill, StatusPill, useSignedInName } from "./shared";
@@ -187,7 +189,7 @@ function Lightbox({
   return (
     <div className="lightbox" role="dialog" aria-label={title} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}>
-        <img src={src} alt={title} />
+        <SecureMediaImg src={src} alt={title} />
         <p>
           {title} · click anywhere to close
         </p>
@@ -222,6 +224,7 @@ export function AiCameraRecordDrawer({
     safelife_reference: "",
   });
   const [closeOutFile, setCloseOutFile] = useState<File | null>(null);
+  const [safelifeRefDraft, setSafelifeRefDraft] = useState("");
 
   useEffect(() => {
     if (!caseId) {
@@ -407,6 +410,23 @@ export function AiCameraRecordDrawer({
     }
   }
 
+  async function onSaveSafelife(event: FormEvent) {
+    event.preventDefault();
+    if (!row || busy || !safelifeRefDraft.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setRow(await setAiCameraSafelife(row.id, safelifeRefDraft.trim()));
+      setSafelifeRefDraft("");
+      onChanged();
+      notifyCasesChanged();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const pairs = row
     ? [
         ["Project", row.project || "—"],
@@ -514,7 +534,7 @@ export function AiCameraRecordDrawer({
                           tabIndex={0}
                           data-lb={p.title}
                         >
-                          <img src={p.src} alt={p.title} />
+                          <SecureMediaImg src={p.src} alt={p.title} />
                           <figcaption>
                             <b>{p.title}</b>
                             <span>{p.meta}</span>
@@ -651,7 +671,7 @@ export function AiCameraRecordDrawer({
                               />
                               <span className="field-note">
                                 Optional. If filled, SafeLife status becomes Updated; otherwise it
-                                stays Pending until Admin closes the record (Not required).
+                                stays Pending and can still be entered after Admin closes the case.
                               </span>
                             </label>
                           ) : null}
@@ -698,18 +718,37 @@ export function AiCameraRecordDrawer({
                           </div>
                         );
                       }
-                      if (sl === "Pending") {
-                        return (
-                          <div className="note amber">
-                            Pending — can be completed with an optional SafeLife reference at
-                            close-out. If Admin closes without one, status becomes Not required.
-                          </div>
-                        );
-                      }
+                      const canEditSafelife = canCloseOut;
                       return (
-                        <div className="note">
-                          Not required — record closed without a SafeLife entry.
-                        </div>
+                        <>
+                          <div className="note amber">
+                            Pending — optional SafeLife reference. You can enter it at close-out
+                            or after the case is Closed.
+                          </div>
+                          {canEditSafelife ? (
+                            <form
+                              className="closeout-form"
+                              style={{ marginTop: 10 }}
+                              onSubmit={(e) => void onSaveSafelife(e)}
+                            >
+                              <label className="fld-ctl">
+                                <span className="lbl">SafeLife reference number</span>
+                                <input
+                                  placeholder="Optional — SL-000000"
+                                  value={safelifeRefDraft}
+                                  onChange={(e) => setSafelifeRefDraft(e.target.value)}
+                                />
+                              </label>
+                              <button
+                                className="btn sm primary"
+                                type="submit"
+                                disabled={busy || !safelifeRefDraft.trim()}
+                              >
+                                {busy ? "Saving…" : "Save SafeLife reference"}
+                              </button>
+                            </form>
+                          ) : null}
+                        </>
                       );
                     })()}
                   </section>

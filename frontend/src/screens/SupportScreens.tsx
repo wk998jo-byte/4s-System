@@ -268,6 +268,11 @@ function buildReviewBlocks(row: CaseDetail): DetailBlock[] {
         },
         { label: "Vehicle Speed", value: `${fieldValue(f.vehicle_speed_kmh)} km/h` },
         { label: "Reported By", value: fieldValue(f.reported_by) },
+        {
+          label: "Uploaded By",
+          value: fieldValue(f.uploaded_by || f.close_out_submitted_by),
+        },
+        { label: "Closed By", value: fieldValue(f.closed_by) },
       ],
     });
     blocks.push({
@@ -310,6 +315,11 @@ function buildReviewBlocks(row: CaseDetail): DetailBlock[] {
         { label: "Date", value: dateWeekValue(row) },
         { label: "Risk Level", value: row.risk_level || "—" },
         { label: "Reported By", value: fieldValue(f.reported_by) },
+        {
+          label: "Uploaded By",
+          value: fieldValue(f.uploaded_by || f.close_out_submitted_by),
+        },
+        { label: "Closed By", value: fieldValue(f.closed_by) },
       ],
     });
     blocks.push({
@@ -1389,7 +1399,7 @@ export function ReviewCloseOut({
               }
             />
             <span className="field-note">
-              Optional. Fills SafeLife as Updated; leave blank to keep Pending until Admin closes.
+              Optional. Fills SafeLife as Updated; leave blank to keep Pending (can still enter after Closed).
             </span>
           </label>
         </>

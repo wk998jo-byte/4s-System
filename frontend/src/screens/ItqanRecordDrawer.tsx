@@ -9,6 +9,7 @@ import {
   type CaseDetail,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { href } from "../lib/routing";
 import { StatusPill, useList } from "./shared";
@@ -274,6 +275,11 @@ export function ItqanRecordDrawer({
           `${formatDay(row.date)}${field(row, "occurred_time") ? `, ${field(row, "occurred_time")}` : ""}`,
         ],
         ["ITQAN status", field(row, "itqan_status") || "—"],
+        ["Reported by", field(row, "reported_by") || "—"],
+        [
+          "Uploaded by",
+          field(row, "uploaded_by") || "—",
+        ],
       ]
     : [];
 
@@ -355,7 +361,7 @@ export function ItqanRecordDrawer({
                             }
                           }}
                         >
-                          <img src={p.src} alt={p.title} />
+                          <SecureMediaImg src={p.src} alt={p.title} />
                           <figcaption>
                             <b>{p.title}</b>
                             <span>{p.meta}</span>
@@ -446,7 +452,7 @@ export function ItqanRecordDrawer({
           onClick={() => setLightbox(null)}
         >
           <div onClick={(e) => e.stopPropagation()}>
-            <img src={lightbox.src} alt={lightbox.title} />
+            <SecureMediaImg src={lightbox.src} alt={lightbox.title} />
             <p>{lightbox.title} · click anywhere to close</p>
           </div>
         </div>

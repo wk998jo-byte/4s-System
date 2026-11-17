@@ -17,6 +17,7 @@ import {
   type CaseSummary,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
 import { useIntegSettings } from "../lib/integSettings";
@@ -209,7 +210,7 @@ function Thumb({ row }: { row: CaseSummary }) {
   if (src) {
     return (
       <span className="ai-thumb" aria-hidden>
-        <img src={src} alt="" loading="lazy" />
+        <SecureMediaImg src={src} alt="" loading="lazy" />
       </span>
     );
   }
@@ -1168,7 +1169,7 @@ function SpeedNewDrawer({
     form.model_id,
     form.asset_number.trim(),
     form.driver_name.trim(),
-    form.driver_badge_number.trim(),
+    form.rental_driver ? "ok" : form.driver_badge_number.trim(),
     form.rental_driver ? form.iqama_number.trim() : "ok",
     form.speed_violation_type_id,
     form.location_coordinates.trim(),
@@ -1200,7 +1201,7 @@ function SpeedNewDrawer({
         model_id: form.model_id,
         asset_number: form.asset_number,
         driver_name: form.driver_name,
-        driver_badge_number: form.driver_badge_number,
+        driver_badge_number: form.rental_driver ? "" : form.driver_badge_number,
         rental_driver: form.rental_driver,
         iqama_number: form.rental_driver ? form.iqama_number : null,
         location_coordinates: form.location_coordinates,
@@ -1346,19 +1347,23 @@ function SpeedNewDrawer({
                     />
                   </label>
                 </div>
-                <div className="fld">
-                  <label className="fld-ctl">
-                    <span className="lbl">
-                      Driver badge number <span className="req">*</span>
-                    </span>
-                    <input
-                      required
-                      value={form.driver_badge_number}
-                      onChange={(e) => setForm({ ...form, driver_badge_number: e.target.value })}
-                      placeholder="Badge number"
-                    />
-                  </label>
-                </div>
+                {!form.rental_driver ? (
+                  <div className="fld">
+                    <label className="fld-ctl">
+                      <span className="lbl">
+                        Driver badge number <span className="req">*</span>
+                      </span>
+                      <input
+                        required
+                        value={form.driver_badge_number}
+                        onChange={(e) =>
+                          setForm({ ...form, driver_badge_number: e.target.value })
+                        }
+                        placeholder="Badge number"
+                      />
+                    </label>
+                  </div>
+                ) : null}
                 <div className="fld">
                   <span className="field-label lbl">Rental driver</span>
                   <div className="radio-pills" role="radiogroup" aria-label="Rental driver">
@@ -1375,6 +1380,7 @@ function SpeedNewDrawer({
                             setForm({
                               ...form,
                               rental_driver: opt,
+                              driver_badge_number: opt ? "" : form.driver_badge_number,
                               iqama_number: opt ? form.iqama_number : "",
                             })
                           }

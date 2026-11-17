@@ -21,14 +21,19 @@ export const SAFELIFE_SKIP_REASONS = [
   "Duplicate of an existing SafeLife entry",
 ] as const;
 
-/** Yes at register / ref at close-out → Updated; No → Pending until Closed → Not required. */
+/**
+ * SafeLife status for AI Camera:
+ * - Updated when a reference (or safelife_update) is present
+ * - Pending otherwise — including after Admin closes the case (still optional to fill later)
+ */
 export function safelifeStatusOf(row: {
   status: string;
   fields?: Record<string, unknown> | null;
 }): "Updated" | "Pending" | "Not required" {
   const ref = String(row.fields?.safelife_ref ?? "").trim();
   if (ref || row.fields?.safelife_update === true) return "Updated";
-  if (row.status === "closed") return "Not required";
+  // Keep Pending after close so the reference can still be entered later.
+  // "Not required" remains in the union for older UI branches only.
   return "Pending";
 }
 

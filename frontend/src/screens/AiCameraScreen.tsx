@@ -17,6 +17,7 @@ import {
   type CaseSummary,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
 import {
@@ -91,7 +92,7 @@ const SLA_LABEL: Record<string, string> = {
   Low: "7 days",
 };
 const SAFELIFE_NO =
-  "SafeLife can be completed later at close-out. Until then the observation stays Pending; if it is closed without a SafeLife entry it becomes Not required.";
+  "SafeLife can be completed later at close-out or after the case is Closed. Until a reference is entered the observation stays Pending.";
 
 function fmtN(n: number) {
   return Number(n || 0).toLocaleString("en-US");
@@ -1005,7 +1006,7 @@ function Thumb({ row }: { row: CaseSummary }) {
   if (src) {
     return (
       <span className="ai-thumb" aria-hidden>
-        <img src={src} alt="" loading="lazy" />
+        <SecureMediaImg src={src} alt="" loading="lazy" />
       </span>
     );
   }

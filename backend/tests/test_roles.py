@@ -87,6 +87,17 @@ def test_operator_can_register_admin_can_approve() -> None:
     assert approved.json()["status"] == "closed"
     # Actor label is `badge - Name` when badge is present on the admin seed.
     assert approved.json()["fields"]["closed_by"] in {"Admin", "A-001 - Admin"}
+    # SafeLife stays attachable after close when no reference was entered yet.
+    assert not (approved.json()["fields"] or {}).get("safelife_ref")
+    safelife = client.post(
+        f"/api/v1/ai-camera-observations/{case_id}/safelife",
+        headers=operator,
+        json={"safelife_reference": "SL-POST-CLOSE-1"},
+    )
+    assert safelife.status_code == 200
+    assert safelife.json()["status"] == "closed"
+    assert safelife.json()["fields"]["safelife_ref"] == "SL-POST-CLOSE-1"
+    assert safelife.json()["fields"]["safelife_update"] is True
 
 
 def test_admin_can_add_project_used_by_operator() -> None:

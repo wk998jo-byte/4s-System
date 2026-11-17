@@ -582,6 +582,9 @@ export function AdminScreen() {
     const reportHseEmail = String(settings.reportHseEmail ?? "").trim();
     const reportHseName =
       String(settings.reportHseName ?? "Dept HSE").trim() || "Dept HSE";
+    const reportAdminEmail = String(settings.reportAdminEmail ?? "").trim();
+    const reportAdminName =
+      String(settings.reportAdminName ?? "Admin").trim() || "Admin";
     const rawDist = (settings.reportDistribution as Record<string, { name?: string; email?: string }>) || {};
     const reportDistribution: Record<string, { name: string; email: string }> = {};
     for (const p of ADMIN_PROJECTS) {
@@ -600,6 +603,8 @@ export function AdminScreen() {
         reportTestEmail,
         reportHseEmail,
         reportHseName,
+        reportAdminEmail,
+        reportAdminName,
         reportDistribution,
       },
       `Report schedule saved · daily at ${dailyAt}`,
@@ -1091,7 +1096,7 @@ export function AdminScreen() {
                 [
                   "safelifeDefault",
                   "Default answer: Update in SafeLife",
-                  "Pre-selects Yes on the form. Yes requires a SafeLife reference at register; No leaves status Pending until close-out or Closed.",
+                  "Pre-selects Yes on the form. Yes requires a SafeLife reference at register; No leaves status Pending until a reference is entered (allowed at close-out or after Closed).",
                 ],
               ] as const
             ).map(([key, title, sub]) => (
@@ -1494,8 +1499,8 @@ export function AdminScreen() {
                   }
                 />
                 <span className="hint">
-                  When set, sign-ready notices go here instead of the HSE / Project
-                  PM addresses below
+                  When set, sign-ready notices go here instead of the HSE / Admin /
+                  Project PM addresses below
                 </span>
               </label>
               <label className="fld">
@@ -1513,6 +1518,24 @@ export function AdminScreen() {
                 />
                 <span className="hint">
                   Notified to sign weekly and monthly reports when they compile
+                </span>
+              </label>
+              <label className="fld">
+                Admin email (weekly co-sign)
+                <input
+                  type="email"
+                  placeholder="admin@example.com"
+                  value={String(settings.reportAdminEmail ?? "")}
+                  onChange={(event) =>
+                    setSettings({
+                      ...settings,
+                      reportAdminEmail: event.target.value,
+                    })
+                  }
+                />
+                <span className="hint">
+                  One inbox for weekly Admin co-sign email notices (in-app notices go to
+                  every Admin)
                 </span>
               </label>
               <div className="fld">
