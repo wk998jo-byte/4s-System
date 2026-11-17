@@ -151,8 +151,7 @@ export function resolveMediaUrl(value: string | null | undefined): string | null
 /** Re-stamp the current media_token onto an uploads URL (or leave non-upload URLs). */
 export function withFreshMediaToken(
   url: string | null | undefined,
-  *,
-  bust?: boolean,
+  options?: { bust?: boolean },
 ): string | null {
   const raw = (url || "").trim();
   if (!raw) return null;
@@ -170,7 +169,7 @@ export function withFreshMediaToken(
       parsed.searchParams.set("media_token", media);
       parsed.searchParams.delete("access_token");
     }
-    if (bust) parsed.searchParams.set("_r", String(Date.now()));
+    if (options?.bust) parsed.searchParams.set("_r", String(Date.now()));
     return parsed.toString();
   } catch {
     return raw;
