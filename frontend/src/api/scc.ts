@@ -1,4 +1,4 @@
-import { getMediaToken } from "../auth/session";
+import { getMediaToken, setMediaToken } from "../auth/session";
 import { getApiBaseUrl, joinUrl } from "./client";
 import { request } from "./http";
 
@@ -136,28 +136,70 @@ export function resolveMediaUrl(value: string | null | undefined): string | null
     v.startsWith("blob:") ||
     /^https?:\/\//i.test(v)
   ) {
-    return v;
+    return withFreshMediaToken(v) || v;
   }
   if (v.startsWith("/uploads/") || v.startsWith("/api/")) {
     let url = joinUrl(getApiBaseUrl(), v);
     if (v.startsWith("/uploads/")) {
-      const media = getMediaToken();
-      if (media) {
-        const sep = url.includes("?") ? "&" : "?";
-        url = `${url}${sep}media_token=${encodeURIComponent(media)}`;
-      }
+      url = withFreshMediaToken(url) || url;
     }
     return url;
   }
   return null;
 }
 
+/** Re-stamp the current media_token onto an uploads URL (or leave non-upload URLs). */
+export function withFreshMediaToken(
+  url: string | null | undefined,
+  *,
+  bust?: boolean,
+): string | null {
+  const raw = (url || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+  try {
+    const absolute = /^https?:\/\//i.test(raw)
+      ? raw
+      : raw.startsWith("/")
+        ? joinUrl(getApiBaseUrl(), raw)
+        : raw;
+    const parsed = new URL(absolute, window.location.origin);
+    if (!parsed.pathname.includes("/uploads/")) return absolute;
+    const media = getMediaToken();
+    if (media) {
+      parsed.searchParams.set("media_token", media);
+      parsed.searchParams.delete("access_token");
+    }
+    if (bust) parsed.searchParams.set("_r", String(Date.now()));
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
+/** Coalesce parallel refreshes (many thumbs failing at once). */
+let mediaTokenInflight: Promise<string | null> | null = null;
+
 /** Mint/refresh attachment token while the API session is still valid. */
 export async function refreshMediaToken(): Promise<string | null> {
-  const result = await request<{ media_token: string }>("/api/v1/auth/media-token", {
-    method: "POST",
-  });
-  return result.media_token || null;
+  if (mediaTokenInflight) return mediaTokenInflight;
+  mediaTokenInflight = (async () => {
+    try {
+      const result = await request<{ media_token: string }>(
+        "/api/v1/auth/media-token",
+        { method: "POST" },
+      );
+      const token = result.media_token || null;
+      if (token) {
+        setMediaToken(token);
+        window.dispatchEvent(new Event("scc-media-token"));
+      }
+      return token;
+    } finally {
+      mediaTokenInflight = null;
+    }
+  })();
+  return mediaTokenInflight;
 }
 
 export const putJson = <T,>(path: string, body: unknown) =>
@@ -525,6 +567,13 @@ export const closeOutAiCamera = (id: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 
+/** Optional SafeLife reference — works while Open, Under Process, or Closed. */
+export const setAiCameraSafelife = (id: string, safelife_reference: string) =>
+  request<CaseDetail>(`/api/v1/ai-camera-observations/${id}/safelife`, {
+    method: "POST",
+    body: JSON.stringify({ safelife_reference }),
+  });
+
 export const confirmDriver = (
   kind: "dashcam" | "speed",
   id: string,
@@ -718,6 +767,7 @@ export interface ReportPacket {
   generated_at?: string | null;
   signed?: { by: string; signature: string; at: string } | null;
   pm_signed?: { by: string; signature: string; at: string } | null;
+  admin_signed?: { by: string; signature: string; at: string } | null;
   issued?: {
     by: string;
     to: string;

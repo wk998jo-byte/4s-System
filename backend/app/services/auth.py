@@ -198,8 +198,10 @@ def capabilities(role: str) -> dict[str, bool]:
         "manage_users": admin,
         "manage_lists": admin,
         "view_kpi": admin,
-        # Dept HSE signs weekly reports and the HSE slot on monthly reports.
+        # Dept HSE signs the HSE slot on weekly + monthly reports.
         "sign_reports": dept_hse,
+        # Weekly co-sign slots: HSE + Admin (both → Signed).
+        "sign_weekly_reports": dept_hse or admin,
         # Monthly signature slots: HSE + Project PM (both → Signed).
         "sign_monthly_reports": dept_hse or receiver,
         "issue_reports": admin,

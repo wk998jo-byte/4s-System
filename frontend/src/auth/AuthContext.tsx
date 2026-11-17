@@ -11,6 +11,9 @@ import { request } from "../api/http";
 import { clearSession, getCachedUser, getToken, saveSession } from "./session";
 import type { AuthUser } from "./types";
 
+/** Keep attachment tokens warm well under the default 12h media TTL. */
+const MEDIA_KEEPALIVE_MS = 15 * 60 * 1000;
+
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
@@ -20,6 +23,14 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+async function ensureMediaToken(): Promise<string | null> {
+  try {
+    return await refreshMediaToken();
+  } catch {
+    return null;
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(getCachedUser);
@@ -34,13 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const me = await request<AuthUser>("/api/v1/auth/me");
-        // Production /uploads rejects ?access_token= — refresh media_token every boot.
-        let media: string | null = null;
-        try {
-          media = await refreshMediaToken();
-        } catch {
-          media = null;
-        }
+        // Production /uploads requires media_token — mint one on every boot.
+        const media = await ensureMediaToken();
         saveSession(token, me, media);
         setUser(me);
       } catch {
@@ -51,6 +57,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, []);
+
+  // Keep media_token alive for the whole login (interval + tab focus).
+  useEffect(() => {
+    if (!user || !getToken()) return;
+
+    const keepAlive = () => {
+      if (document.visibilityState === "hidden") return;
+      if (!getToken()) return;
+      void ensureMediaToken();
+    };
+
+    const intervalId = window.setInterval(keepAlive, MEDIA_KEEPALIVE_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") keepAlive();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", keepAlive);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", keepAlive);
+    };
+  }, [user]);
 
   useEffect(() => {
     const onDenied = () => {
@@ -75,6 +104,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ username, password }),
         });
         saveSession(result.access_token, result.user, result.media_token);
+        if (!result.media_token) {
+          await ensureMediaToken();
+        } else {
+          window.dispatchEvent(new Event("scc-media-token"));
+        }
         setUser(result.user);
         if (!result.user.must_change_password) {
           window.location.hash = "#/dashboard";
@@ -91,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const token = getToken();
         if (token) saveSession(token, updated);
+        await ensureMediaToken();
         setUser(updated);
         window.location.hash = "#/dashboard";
         return updated;

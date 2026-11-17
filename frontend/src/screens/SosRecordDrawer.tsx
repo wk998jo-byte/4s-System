@@ -9,6 +9,7 @@ import {
   type CaseDetail,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { SignedInNameField, StatusPill, useSignedInName } from "./shared";
 
@@ -400,7 +401,7 @@ export function SosRecordDrawer({
                             }
                           }}
                         >
-                          <img src={p.src} alt={p.title} />
+                          <SecureMediaImg src={p.src} alt={p.title} />
                           <figcaption>
                             <b>{p.title}</b>
                             <span>{p.meta}</span>
@@ -612,7 +613,7 @@ export function SosRecordDrawer({
         onClick={() => setLightbox(null)}
       >
         <div onClick={(e) => e.stopPropagation()}>
-          <img src={lightbox.src} alt={lightbox.title} />
+          <SecureMediaImg src={lightbox.src} alt={lightbox.title} />
           <p>
             {lightbox.title} · click anywhere to close
           </p>

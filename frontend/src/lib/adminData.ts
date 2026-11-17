@@ -152,6 +152,8 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   reportTestEmail: "rose.subait@binquraya.com",
   reportHseEmail: "",
   reportHseName: "Dept HSE",
+  reportAdminEmail: "",
+  reportAdminName: "Admin",
   reportDistribution: {
     Jafurah: { name: "[PM name], Jafurah Project", email: "" },
     MGS: { name: "[PM name], MGS Project", email: "" },

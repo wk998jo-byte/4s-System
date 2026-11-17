@@ -17,6 +17,7 @@ import {
   type CaseSummary,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
 import { useIntegSettings } from "../lib/integSettings";
@@ -789,6 +790,31 @@ function BarsList({
   );
 }
 
+/** Axis label for Operators performance only — first name; tip keeps full label. */
+function opsChartFirstName(raw: string) {
+  const s = (raw || "").trim();
+  if (!s) return "Unknown";
+  // "50483 - Fajr AlAmer" → "Fajr"
+  const dashed = s.match(/^\d[\d\s]*[-–—]\s*(.+)$/);
+  const fullName = dashed?.[1]?.trim()
+    || (s.includes(" - ") ? s.slice(s.indexOf(" - ") + 3).trim() : s);
+  const first = (fullName || s).split(/\s+/)[0] || s;
+  return first;
+}
+
+function opsChartTipTitle(raw: string) {
+  const s = (raw || "").trim();
+  if (!s) return "Unknown";
+  // Prefer "Fajr AlAmer · 50483" for hover; fall back to stored label.
+  const m = s.match(/^(\d[\d\s]*)\s*[-–—]\s*(.+)$/);
+  if (m) {
+    const badge = m[1].replace(/\s+/g, "").trim();
+    const name = m[2].trim();
+    if (name && badge) return `${name} · ${badge}`;
+  }
+  return s;
+}
+
 function OpsChart({ entries }: { entries: [string, number][] }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
@@ -825,7 +851,7 @@ function OpsChart({ entries }: { entries: [string, number][] }) {
           const x = pad.l + i * (iw / entries.length) + 4;
           const y = pad.t + ih - h;
           const fill = i === 0 ? PAL.red : i < 3 ? PAL.copper : PAL.steel;
-          const name = k.split(/\s+/)[0] || k;
+          const name = opsChartFirstName(k);
           return (
             <g key={k}>
               {v > 0 ? (
@@ -840,7 +866,7 @@ function OpsChart({ entries }: { entries: [string, number][] }) {
                   onMouseMove={(e) =>
                     setTip(
                       tipFromEvent(e, hostRef.current, {
-                        title: k,
+                        title: opsChartTipTitle(k),
                         rows: [{ color: fill, text: fmtN(v) }],
                       }),
                     )
@@ -1020,7 +1046,7 @@ function Thumb({ row }: { row: CaseSummary }) {
   if (src) {
     return (
       <span className="ai-thumb" aria-hidden>
-        <img src={src} alt="" loading="lazy" />
+        <SecureMediaImg src={src} alt="" loading="lazy" />
       </span>
     );
   }
@@ -1152,7 +1178,7 @@ function DashcamNewDrawer({
     form.model_id,
     form.asset_number.trim(),
     form.driver_name.trim(),
-    form.driver_badge_number.trim(),
+    form.rental_driver ? "ok" : form.driver_badge_number.trim(),
     form.rental_driver ? form.iqama_number.trim() : "ok",
     form.occurred_on,
     form.occurred_time,
@@ -1183,7 +1209,7 @@ function DashcamNewDrawer({
         model_id: form.model_id,
         asset_number: form.asset_number,
         driver_name: form.driver_name,
-        driver_badge_number: form.driver_badge_number,
+        driver_badge_number: form.rental_driver ? "" : form.driver_badge_number,
         rental_driver: form.rental_driver,
         iqama_number: form.rental_driver ? form.iqama_number : null,
         occurred_on: form.occurred_on,
@@ -1330,19 +1356,23 @@ function DashcamNewDrawer({
                     />
                   </label>
                 </div>
-                <div className="fld">
-                  <label className="fld-ctl">
-                    <span className="lbl">
-                      Driver badge number <span className="req">*</span>
-                    </span>
-                    <input
-                      required
-                      value={form.driver_badge_number}
-                      onChange={(e) => setForm({ ...form, driver_badge_number: e.target.value })}
-                      placeholder="Badge number"
-                    />
-                  </label>
-                </div>
+                {!form.rental_driver ? (
+                  <div className="fld">
+                    <label className="fld-ctl">
+                      <span className="lbl">
+                        Driver badge number <span className="req">*</span>
+                      </span>
+                      <input
+                        required
+                        value={form.driver_badge_number}
+                        onChange={(e) =>
+                          setForm({ ...form, driver_badge_number: e.target.value })
+                        }
+                        placeholder="Badge number"
+                      />
+                    </label>
+                  </div>
+                ) : null}
                 <div className="fld full">
                   <span className="field-label lbl">Rental driver</span>
                   <div className="radio-pills" role="radiogroup" aria-label="Rental driver">
@@ -1355,7 +1385,14 @@ function DashcamNewDrawer({
                           type="radio"
                           name="rental"
                           checked={form.rental_driver === opt}
-                          onChange={() => setForm({ ...form, rental_driver: opt })}
+                          onChange={() =>
+                            setForm({
+                              ...form,
+                              rental_driver: opt,
+                              driver_badge_number: opt ? "" : form.driver_badge_number,
+                              iqama_number: opt ? form.iqama_number : "",
+                            })
+                          }
                         />
                         <span className="radio-dot" aria-hidden />
                         <span>{opt ? "Yes" : "No"}</span>

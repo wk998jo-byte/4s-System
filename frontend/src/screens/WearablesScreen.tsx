@@ -19,6 +19,7 @@ import {
   type HwPayload,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
 import { href } from "../lib/routing";
@@ -216,7 +217,7 @@ function Thumb({ row }: { row: CaseSummary }) {
   if (src) {
     return (
       <span className="ai-thumb" aria-hidden>
-        <img src={src} alt="" loading="lazy" />
+        <SecureMediaImg src={src} alt="" loading="lazy" />
       </span>
     );
   }

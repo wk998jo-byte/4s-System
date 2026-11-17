@@ -13,6 +13,14 @@ export function getMediaToken(): string | null {
   return window.localStorage.getItem(MEDIA_TOKEN_KEY);
 }
 
+export function setMediaToken(mediaToken: string | null | undefined): void {
+  if (mediaToken) {
+    window.localStorage.setItem(MEDIA_TOKEN_KEY, mediaToken);
+  } else {
+    window.localStorage.removeItem(MEDIA_TOKEN_KEY);
+  }
+}
+
 export function getCachedUser(): AuthUser | null {
   const raw = window.localStorage.getItem(USER_KEY);
   if (!raw) return null;

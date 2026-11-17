@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ListItem(BaseModel):
@@ -79,7 +79,8 @@ class DashcamCreate(BaseModel):
     model_id: str
     asset_number: str = Field(..., min_length=1, max_length=80)
     driver_name: str = Field(..., min_length=1, max_length=120)
-    driver_badge_number: str = Field(..., min_length=1, max_length=80)
+    # Badge required when not rental; rental uses iqama instead.
+    driver_badge_number: str = Field(default="", max_length=80)
     rental_driver: bool = False
     iqama_number: str | None = None
     occurred_on: date
@@ -93,6 +94,16 @@ class DashcamCreate(BaseModel):
     upload_to_itqan: bool = True
     itqan_skip_reason: str | None = Field(default=None, max_length=500)
 
+    @model_validator(mode="after")
+    def _driver_id_for_rental(self) -> "DashcamCreate":
+        if self.rental_driver:
+            self.driver_badge_number = ""
+        elif not (self.driver_badge_number or "").strip():
+            raise ValueError(
+                "Driver badge number is required when Rental driver is No."
+            )
+        return self
+
 
 class SpeedCreate(BaseModel):
     assign_to: Literal["project", "department"]
@@ -103,7 +114,8 @@ class SpeedCreate(BaseModel):
     model_id: str
     asset_number: str = Field(..., min_length=1, max_length=80)
     driver_name: str = Field(..., min_length=1, max_length=120)
-    driver_badge_number: str = Field(..., min_length=1, max_length=80)
+    # Badge required when not rental; rental uses iqama instead.
+    driver_badge_number: str = Field(default="", max_length=80)
     rental_driver: bool = False
     iqama_number: str | None = None
     location_coordinates: str = Field(..., min_length=1, max_length=80)
@@ -115,6 +127,16 @@ class SpeedCreate(BaseModel):
     fms_evidence: str | None = Field(default=None, max_length=260)
     upload_to_itqan: bool = True
     itqan_skip_reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _driver_id_for_rental(self) -> "SpeedCreate":
+        if self.rental_driver:
+            self.driver_badge_number = ""
+        elif not (self.driver_badge_number or "").strip():
+            raise ValueError(
+                "Driver badge number is required when Rental driver is No."
+            )
+        return self
 
 
 class SosCreate(BaseModel):
@@ -139,6 +161,12 @@ class AiCameraCloseOut(BaseModel):
     close_out_action: str = Field(..., min_length=1, max_length=4000)
     close_out_picture: str = Field(..., min_length=1, max_length=500)
     safelife_reference: str | None = Field(default=None, max_length=80)
+
+
+class AiCameraSafelifeUpdate(BaseModel):
+    """Optional SafeLife reference — allowed while Open, Under Process, or Closed."""
+
+    safelife_reference: str = Field(..., min_length=1, max_length=80)
 
 
 class ConfirmDriver(BaseModel):

@@ -287,6 +287,7 @@ export function AppShell({
       escalate?: number;
     };
   } | null>(null);
+  const isAdmin = user?.role === "admin";
   const isHse = user?.role === "dept_hse";
   const isPm = user?.role === "receiver" || user?.role === "project_pm";
 
@@ -396,13 +397,21 @@ export function AppShell({
         ["report", "Reports", overdue?.counts.report ?? 0],
       ] as const;
     }
+    if (isAdmin) {
+      return [
+        ["all", "All", overdue?.counts.all ?? 0],
+        ["esc", "Escalated", overdue?.counts.esc ?? 0],
+        ["over", "Overdue", overdue?.counts.over ?? 0],
+        ["report", "Reports", overdue?.counts.report ?? 0],
+      ] as const;
+    }
     return [
       ["all", "All", overdue?.counts.all ?? 0],
       ["esc", "Escalated", overdue?.counts.esc ?? 0],
       ["over", "Overdue", overdue?.counts.over ?? 0],
       ["soon", "Due soon", overdue?.counts.soon ?? 0],
     ] as const;
-  }, [isHse, isPm, overdue?.counts]);
+  }, [isAdmin, isHse, isPm, overdue?.counts]);
 
   useEffect(() => {
     // Role-specific panels hide some tabs — snap back if needed.
@@ -418,7 +427,10 @@ export function AppShell({
     if (isHse && (notifTab === "over" || notifTab === "soon")) {
       setNotifTab("all");
     }
-  }, [isHse, isPm, notifTab]);
+    if (isAdmin && notifTab === "soon") {
+      setNotifTab("all");
+    }
+  }, [isAdmin, isHse, isPm, notifTab]);
 
   const notifItems = useMemo(() => {
     const items = overdue?.items || [];

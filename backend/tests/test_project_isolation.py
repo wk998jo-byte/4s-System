@@ -128,8 +128,8 @@ def test_lists_only_expose_assigned_project(gate, identity, project, foreign):
     reports = client.get("/api/v1/reports", headers=headers[identity]).json()
     assert {r["project"] for r in reports["details"]} == {project}
     assert {r["project"] for r in reports["by_project"]} == {project}
-    assert all(p["kind"] == "daily" or p["scope"] == project for p in reports["packets"])
-    assert all(p["scope"] == "Authorized projects" for p in reports["packets"] if p["kind"] == "daily")
+    assert reports["packets"]
+    assert all(p["scope"] == project for p in reports["packets"])
     assert foreign not in json.dumps(reports)
     assert "FOREIGN-DISTRIBUTION" not in json.dumps(reports)
     assert database_snapshot(store) == before
@@ -151,7 +151,7 @@ def test_forged_project_filters_do_not_widen_scope(gate, path):
         assert objects["transfer_Jafurah"]["id"] not in {r["id"] for r in payload["items"]}
     else:
         assert all(r["project"] == "Yanbu" for r in payload["details"])
-        assert all(p["kind"] == "daily" or p["scope"] == "Yanbu" for p in payload["packets"])
+        assert all(p["scope"] == "Yanbu" for p in payload["packets"])
 
 
 @pytest.mark.parametrize("identity,method,template,expected", [
@@ -298,7 +298,9 @@ def test_admin_retains_existing_global_permissions_without_new_sign_or_receive_r
     assert saved.status_code == 201
     reports = client.get("/api/v1/reports", headers=headers[identity]).json()
     assert {r["project"] for r in reports["details"]} == {"Yanbu", "Jafurah"}
-    assert all(p["scope"] == "All projects" for p in reports["packets"] if p["kind"] == "daily")
+    daily = [p for p in reports["packets"] if p["kind"] == "daily"]
+    assert any(p["scope"] == "All projects" for p in daily)
+    assert {"Yanbu", "Jafurah"} <= {p["scope"] for p in daily}
     before = database_snapshot(gate[1])
     assert client.post(f"/api/v1/reports/{objects['monthly_Jafurah']['id']}/sign",
                        headers=headers[identity], json={"signature_image": "test.png"}).status_code == 403
@@ -322,15 +324,16 @@ def test_register_creation_scope_and_response_do_not_leak_foreign_inventory(gate
     assert saved["hw"]["all_projects"] == 2
 
 
-def test_daily_projection_does_not_rewrite_shared_packets_or_expose_other_days(gate):
+def test_scoped_daily_packets_are_per_project_not_all_projects(gate):
     client, store, headers, _ = gate
     raw_before = deepcopy(store._report_packets_snapshot())
     response = client.get("/api/v1/reports", headers=headers["pm_a"]).json()
     daily = [p for p in response["packets"] if p["kind"] == "daily"]
     assert daily
-    assert all(p["scope"] == "Authorized projects" for p in daily)
+    assert all(p["scope"] == "Yanbu" for p in daily)
     assert "2026-10-26" not in {p["a"] for p in daily}  # Jafurah-only day
     assert "2026-10-25" in {p["a"] for p in daily}  # Yanbu day
+    assert not any(p["scope"] == "All projects" for p in response["packets"])
     assert {r["project"] for r in response["details"]} == {"Yanbu"}
     assert store._report_packets_snapshot() == raw_before
 

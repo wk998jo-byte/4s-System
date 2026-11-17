@@ -1703,7 +1703,8 @@ class PlatformStore:
                     if payload.updated_in_safelife
                     else None
                 ),
-                # No skip-reason on register: No → Pending until close-out or Closed.
+                # No skip-reason on register: No → Pending until a SafeLife ref is entered
+                # (allowed at close-out or after the case is Closed).
                 "safelife_skip_reason": None,
             },
         }
@@ -1742,7 +1743,9 @@ class PlatformStore:
                 "model": self.catalog.label("model", payload.model_id),
                 "asset_number": payload.asset_number,
                 "driver_name": payload.driver_name,
-                "driver_badge_number": payload.driver_badge_number,
+                "driver_badge_number": (
+                    "" if payload.rental_driver else (payload.driver_badge_number or "").strip()
+                ),
                 "rental_driver": payload.rental_driver,
                 "iqama_number": iqama,
                 "occurred_time": payload.occurred_time.strftime("%H:%M"),
@@ -1790,7 +1793,9 @@ class PlatformStore:
                 "model": self.catalog.label("model", payload.model_id),
                 "asset_number": payload.asset_number,
                 "driver_name": payload.driver_name,
-                "driver_badge_number": payload.driver_badge_number,
+                "driver_badge_number": (
+                    "" if payload.rental_driver else (payload.driver_badge_number or "").strip()
+                ),
                 "rental_driver": payload.rental_driver,
                 "iqama_number": iqama,
                 "location_coordinates": payload.location_coordinates,
@@ -1868,6 +1873,26 @@ class PlatformStore:
 
         return self._patch_case(case_id, "ai_camera", mutate)
 
+    def set_ai_camera_safelife(
+        self, case_id: str, payload, actor: str | None = None
+    ) -> dict | None:
+        """Attach / update SafeLife reference on an AI Camera case (including Closed)."""
+
+        def mutate(record: dict) -> None:
+            sl_ref = (getattr(payload, "safelife_reference", None) or "").strip()
+            if not sl_ref:
+                raise ValueError("SafeLife reference is required.")
+            record["fields"]["safelife_ref"] = sl_ref
+            record["fields"]["safelife_update"] = True
+            record["fields"]["safelife_skip_reason"] = None
+            if actor:
+                record["fields"]["safelife_updated_by"] = actor
+            record["fields"]["safelife_updated_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+        return self._patch_case(case_id, "ai_camera", mutate)
+
     def confirm_driver(
         self, case_id: str, record_type: str, payload, actor: str | None = None
     ) -> dict | None:
@@ -1900,10 +1925,14 @@ class PlatformStore:
                 fields["itqan_skip_reason"] = reason
                 fields["itqan_upload_proof"] = None
                 fields["close_out_action"] = f"Not uploaded to ITQAN · {reason}"
-            fields["uploaded_by"] = payload.uploaded_by.strip()
+            # Confirm / ITQAN upload must never overwrite the original reporter.
+            uploader = (actor or getattr(payload, "uploaded_by", None) or "").strip()
+            if not uploader:
+                uploader = (payload.uploaded_by or "").strip()
+            fields["uploaded_by"] = uploader
             fields["confirmed_at"] = datetime.now(timezone.utc).isoformat()
-            if actor:
-                fields["close_out_submitted_by"] = actor
+            if uploader:
+                fields["close_out_submitted_by"] = uploader
             # Resubmit after Admin return → clear prior reject notice.
             fields.pop("reject_reason", None)
             fields.pop("rejected_by", None)
@@ -2095,10 +2124,9 @@ class PlatformStore:
                 "source_record_type": source_type,
                 "source_case_label": source.get("case_id"),
                 "itqan_upload_proof": proof,
-                "reported_by": fields.get("uploaded_by")
-                or fields.get("reported_by")
-                or actor
-                or "Operator",
+                # Keep the source registrant separate from who confirmed/uploaded.
+                "reported_by": fields.get("reported_by") or actor or "Operator",
+                "uploaded_by": fields.get("uploaded_by") or actor or None,
                 "registered_at": confirmed,
                 "linked_from": source.get("case_id"),
             },
@@ -2372,7 +2400,45 @@ class PlatformStore:
             row = session.get(CaseRow, case_id)
             if not row or row.is_deleted:
                 return None
-            return _case_dict(row)
+            data = _case_dict(row)
+        return self._heal_itqan_attribution(data)
+
+    def _heal_itqan_attribution(self, record: dict) -> dict:
+        """Restore registrant vs uploader on linked ITQAN rows created before the split."""
+        if record.get("record_type") != "itqan":
+            return record
+        fields = dict(record.get("fields") or {})
+        source_id = str(fields.get("source_case_id") or "").strip()
+        if not source_id:
+            return record
+        with self._sessions() as session:
+            source = session.get(CaseRow, source_id)
+            if not source or source.is_deleted:
+                return record
+            src_fields = dict(source.fields or {})
+        original = str(src_fields.get("reported_by") or "").strip()
+        uploader = str(
+            src_fields.get("uploaded_by")
+            or fields.get("uploaded_by")
+            or ""
+        ).strip()
+        changed = False
+        if original and fields.get("reported_by") != original:
+            fields["reported_by"] = original
+            changed = True
+        if uploader and fields.get("uploaded_by") != uploader:
+            fields["uploaded_by"] = uploader
+            changed = True
+        if not changed:
+            return record
+        record["fields"] = fields
+        with self._lock, self._sessions() as session:
+            row = session.get(CaseRow, record["id"])
+            if row and not row.is_deleted:
+                row.fields = fields
+                flag_modified(row, "fields")
+                session.commit()
+        return record
 
     def period_bounds(
         self,
@@ -2915,6 +2981,10 @@ class PlatformStore:
                 status = cell.status if cell.status in {"ok", "missing"} else (
                     "ok" if has_values else "missing"
                 )
+                # Do not create empty shells for hours nobody entered — keeps
+                # Logged-by scoped to hours that were actually saved.
+                if existing is None and not has_values and status == "missing":
+                    continue
                 if existing is None:
                     existing = WeatherHourlyReadingRow(
                         id=str(uuid4()),
@@ -2938,13 +3008,15 @@ class PlatformStore:
                 existing.category_name = cat["name"] if cat else None
                 existing.remarks = cell.remarks
                 existing.status = status
-                # Per-hour logger: keep prior person unless this cell names someone
-                # (or the row never had a logger yet).
+                # Per-hour logger only: use the cell's logger when provided.
+                # Never stamp the request-level name onto empty / untouched hours.
                 cell_logger = (getattr(cell, "logged_by", None) or "").strip() or None
                 if cell_logger:
                     existing.logged_by = cell_logger
-                elif not existing.logged_by:
+                elif has_values and not existing.logged_by:
                     existing.logged_by = logged_by
+                elif not has_values and status == "missing":
+                    existing.logged_by = None
                 existing.updated_at = now
             session.commit()
         return self.get_weather_hourly(project, observed_on)
@@ -4227,24 +4299,12 @@ class PlatformStore:
         packets = [packet for packet in packets if can_view_report(user, packet)]
         settings = self.get_platform_settings()
         if allowed_set is not None:
-            source_days = {
-                source for source in self._report_source_days() if source[0] in allowed_set
-            } if allowed_set else set()
-            visible = []
-            for packet in packets:
-                if packet.get("kind") != "daily":
-                    visible.append(packet)
-                elif self._packet_has_source(packet, source_days):
-                    # Daily packets are shared all-project schedule records.
-                    # Return only safe metadata and the already-filtered case
-                    # details; never rewrite or sign the shared saved packet.
-                    view = {key: packet.get(key) for key in (
-                        "id", "kind", "label", "a", "b", "status", "generated_at"
-                    )}
-                    view["scope"] = "Authorized projects"
-                    visible.append(view)
-            packets = visible
-            settings = {key: settings[key] for key in ("dailyAt", "weeklyDay", "monthlyDay") if key in settings}
+            # Scoped users only receive schedule settings (not distribution contacts).
+            settings = {
+                key: settings[key]
+                for key in ("dailyAt", "weeklyDay", "monthlyDay")
+                if key in settings
+            }
         return {
             "prototype": True,
             "by_project": by_project,
@@ -4288,10 +4348,13 @@ class PlatformStore:
             "weeklyDay": "Saturday",
             "monthlyDay": 1,
             # Editable in Administration → Report schedule. Test email overrides
-            # HSE + PM inboxes so you can verify delivery on one address.
+            # HSE + Admin + PM inboxes so you can verify delivery on one address.
             "reportTestEmail": "rose.subait@binquraya.com",
             "reportHseEmail": "",
             "reportHseName": "Dept HSE",
+            # Single Admin inbox for weekly co-sign email notices (in-app goes to all admins).
+            "reportAdminEmail": "",
+            "reportAdminName": "Admin",
             "reportDistribution": {
                 "Jafurah": {
                     "name": "[PM name], Jafurah Project",
@@ -5104,7 +5167,7 @@ class PlatformStore:
                 items = [dict(item) for item in row.value if isinstance(item, dict)]
             else:
                 items = []
-        # Normalize monthly status from signatures so stale Issued / Ready labels
+        # Normalize weekly/monthly status from signatures so stale labels
         # never surface in notifications or other snapshot consumers.
         source_days = self._report_source_days()
         for item in items:
@@ -5113,9 +5176,15 @@ class PlatformStore:
             ):
                 item["status"] = "No source data"
                 continue
-            if item.get("kind") != "monthly":
-                continue
             if str(item.get("status") or "").lower().startswith("compil"):
+                continue
+            if item.get("kind") == "weekly":
+                item["status"] = self._weekly_signature_status(
+                    hse_signed=bool(item.get("signed")),
+                    admin_signed=bool(item.get("admin_signed")),
+                )
+                continue
+            if item.get("kind") != "monthly":
                 continue
             if item.get("issued"):
                 item["status"] = "Issued"
@@ -5134,6 +5203,15 @@ class PlatformStore:
         if not hse_signed:
             return "Awaiting HSE signature"
         return "Awaiting PM signature"
+
+    def _weekly_signature_status(self, *, hse_signed: bool, admin_signed: bool) -> str:
+        if hse_signed and admin_signed:
+            return "Signed"
+        if not hse_signed and not admin_signed:
+            return "Awaiting signatures"
+        if not hse_signed:
+            return "Awaiting HSE signature"
+        return "Awaiting Admin signature"
 
     def _report_ready_notifications(
         self,
@@ -5158,8 +5236,18 @@ class PlatformStore:
             status = str(packet.get("status") or "")
             if not status.startswith("Awaiting"):
                 continue
-            if kind == "weekly" and packet.get("signed"):
-                continue
+            if kind == "weekly":
+                # Each role only sees packs still waiting on their own signature.
+                if for_role == "dept_hse" and packet.get("signed"):
+                    continue
+                if for_role == "admin" and packet.get("admin_signed"):
+                    continue
+                if (
+                    for_role is None
+                    and packet.get("signed")
+                    and packet.get("admin_signed")
+                ):
+                    continue
             if kind == "monthly":
                 if packet.get("issued"):
                     continue
@@ -5221,6 +5309,15 @@ class PlatformStore:
             projects=sorted(allowed) if allowed is not None else None,
         )
 
+    def _admin_report_ready_notifications(self, user: dict | None = None) -> list[dict]:
+        """Admin: weekly packs awaiting Admin co-signature (all scopes)."""
+        del user  # All admins see every weekly pack still needing Admin sign.
+        return self._report_ready_notifications(
+            kinds={"weekly"},
+            for_role="admin",
+            projects=None,
+        )
+
     def _pm_report_ready_notifications(self, user: dict | None = None) -> list[dict]:
         """Project PM: monthly packs awaiting PM signature only."""
         projects = project_scope(user)
@@ -5254,6 +5351,14 @@ class PlatformStore:
             next_value["reportHseEmail"] = str(payload.get("reportHseEmail") or "").strip()
         if "reportHseName" in (payload or {}):
             next_value["reportHseName"] = str(payload.get("reportHseName") or "Dept HSE").strip()
+        if "reportAdminEmail" in (payload or {}):
+            next_value["reportAdminEmail"] = str(
+                payload.get("reportAdminEmail") or ""
+            ).strip()
+        if "reportAdminName" in (payload or {}):
+            next_value["reportAdminName"] = str(
+                payload.get("reportAdminName") or "Admin"
+            ).strip() or "Admin"
         for flag in ("notifyOperator", "notifyAdmin", "notifyHSE"):
             if flag in (payload or {}):
                 next_value[flag] = self._setting_bool(payload, flag, True)
@@ -5269,8 +5374,15 @@ class PlatformStore:
         return self.get_platform_settings()
 
     def _project_code(self, name: str, index: int) -> str:
+        if (name or "").strip() == "All projects":
+            return "ALL"
         letters = "".join(ch for ch in (name or "").upper() if ch.isalpha())
         return (letters[:3] or f"P{index + 1}").ljust(3, "X")[:3]
+
+    @staticmethod
+    def _report_scopes(projects: list[str]) -> list[str]:
+        """Per-project packs plus one All-projects pack (same look, broader scope)."""
+        return [*(projects or []), "All projects"]
 
     def _sunday_week_bounds(self, day) -> tuple:
         """Return (Sunday, Saturday) for the week containing day."""
@@ -5320,16 +5432,22 @@ class PlatformStore:
     @staticmethod
     def _packet_has_source(packet: dict, source_days: set[tuple[str, str, str]]) -> bool:
         scope = str(packet.get("scope") or "")
+        all_scope = scope == "All projects"
         return any(
             str(packet.get("a") or "") <= day <= str(packet.get("b") or "")
             and not (packet.get("kind") == "daily" and source == "weekly_weather")
-            and (packet.get("kind") == "daily" or scope == project)
+            and (all_scope or scope == project)
             for project, day, source in source_days
         )
 
     @staticmethod
     def _packet_has_approval(packet: dict) -> bool:
-        return bool(packet.get("signed") or packet.get("pm_signed") or packet.get("issued"))
+        return bool(
+            packet.get("signed")
+            or packet.get("pm_signed")
+            or packet.get("admin_signed")
+            or packet.get("issued")
+        )
 
     def _parse_daily_at(self, raw: object) -> tuple[int, int]:
         text = str(raw or "23:59").strip() or "23:59"
@@ -5340,8 +5458,10 @@ class PlatformStore:
         minute = min(59, max(0, int(match.group(2))))
         return hour, minute
 
-    def _rebuild_daily_packets(self, existing: list[dict]) -> list[dict]:
-        """Build daily schedule candidates; callers must check source data.
+    def _rebuild_daily_packets(
+        self, existing: list[dict], projects: list[str]
+    ) -> list[dict]:
+        """Build daily schedule candidates per project + All projects.
 
         Before the Administration dailyAt cutoff, today stays Compiling.
         At/after cutoff (and for every past day), status becomes Generated and
@@ -5357,11 +5477,18 @@ class PlatformStore:
             for item in existing
             if isinstance(item, dict)
         }
+        by_scope_day = {
+            (str(item.get("scope") or ""), str(item.get("a") or "")[:10]): dict(item)
+            for item in existing
+            if isinstance(item, dict) and item.get("scope") and item.get("a")
+        }
         rebuilt: list[dict] = []
+        scopes = self._report_scopes(projects)
         # Evaluate the recent window without treating its dates as saved reports.
         for offset in range(30):
             day = today - timedelta(days=offset)
-            report_id = f"DR-{day.strftime('%Y%m%d')}"
+            day_key = day.strftime("%Y%m%d")
+            day_iso = day.isoformat()
             is_today = day == today
             compiling = is_today and not past_cutoff
             status = "Compiling" if compiling else "Generated"
@@ -5370,25 +5497,35 @@ class PlatformStore:
                 generated_at = datetime(
                     day.year, day.month, day.day, hour, minute, tzinfo=AST
                 ).isoformat()
-            prev = by_id.get(report_id) or {}
-            item = {
-                **prev,
-                "id": report_id,
-                "kind": "daily",
-                "scope": "All projects",
-                "label": day.isoformat(),
-                "status": status,
-                "a": day.isoformat(),
-                "b": day.isoformat(),
-                "signed": prev.get("signed"),
-                "issued": prev.get("issued"),
-                "generated_at": prev.get("generated_at") or generated_at,
-            }
-            # Never reopen a day that already finalized.
-            if str(prev.get("status") or "") == "Generated" and compiling:
-                item["status"] = "Generated"
-                item["generated_at"] = prev.get("generated_at") or generated_at
-            rebuilt.append(item)
+            for index, name in enumerate(scopes):
+                code = self._project_code(name, index)
+                report_id = f"DR-{day_key}-{code}"
+                # Migrate legacy single All-projects id DR-YYYYMMDD.
+                legacy_all_id = f"DR-{day_key}" if name == "All projects" else None
+                prev = (
+                    by_id.get(report_id)
+                    or (by_id.get(legacy_all_id) if legacy_all_id else None)
+                    or by_scope_day.get((name, day_iso))
+                    or {}
+                )
+                item = {
+                    **prev,
+                    "id": report_id,
+                    "kind": "daily",
+                    "scope": name,
+                    "label": day_iso,
+                    "status": status,
+                    "a": day_iso,
+                    "b": day_iso,
+                    "signed": prev.get("signed"),
+                    "issued": prev.get("issued"),
+                    "generated_at": prev.get("generated_at") or generated_at,
+                }
+                # Never reopen a day that already finalized.
+                if str(prev.get("status") or "") == "Generated" and compiling:
+                    item["status"] = "Generated"
+                    item["generated_at"] = prev.get("generated_at") or generated_at
+                rebuilt.append(item)
         return rebuilt
 
     def _report_packets(self) -> list[dict]:
@@ -5402,7 +5539,8 @@ class PlatformStore:
         # periods. Keep every saved packet, including older and signed history.
         source_days = self._report_source_days()
         rebuilt_daily = self._rebuild_daily_packets(
-            [p for p in packets if p.get("kind") == "daily"]
+            [p for p in packets if p.get("kind") == "daily"],
+            projects,
         )
         rebuilt_weekly = self._rebuild_weekly_packets(
             [p for p in packets if p.get("kind") == "weekly"],
@@ -5427,6 +5565,15 @@ class PlatformStore:
             if not has_source:
                 item["status"] = "No source data"
             result[item["id"]] = item
+        # Drop legacy daily All ids (DR-YYYYMMDD) once DR-YYYYMMDD-ALL exists.
+        for pid in list(result):
+            if (
+                result[pid].get("kind") == "daily"
+                and result[pid].get("scope") == "All projects"
+                and re.fullmatch(r"DR-\d{8}", str(pid) or "")
+                and f"{pid}-ALL" in result
+            ):
+                result.pop(pid, None)
         packets = list(result.values())
         for item in packets:
             if item.get("kind") in {"daily", "weekly", "monthly"} and not (
@@ -5469,10 +5616,10 @@ class PlatformStore:
     def _rebuild_weekly_packets(
         self, existing: list[dict], projects: list[str]
     ) -> list[dict]:
-        """Build weekly schedule candidates per project, not completed reports.
+        """Build weekly schedule candidates per project + All, not completed reports.
 
         Current week stays Compiling until Administration weeklyDay at dailyAt;
-        then it becomes Awaiting HSE signature (and stays signed if already signed).
+        then Dept HSE and Admin each co-sign (status tracks who is still needed).
         """
         settings = self.get_platform_settings()
         weekly_day = str(settings.get("weeklyDay") or "Saturday")
@@ -5507,7 +5654,7 @@ class PlatformStore:
             b = week_end.isoformat()
             _, week_no = week_from_date(week_end)
             finalized = today > compile_day or (today == compile_day and past_cutoff)
-            for index, name in enumerate(projects):
+            for index, name in enumerate(self._report_scopes(projects)):
                 report_id = self._weekly_report_id(week_end, name, index)
                 prev = by_id.get(report_id) or by_scope_range.get((name, a, b)) or {}
                 if not prev and week_offset == 0:
@@ -5521,15 +5668,18 @@ class PlatformStore:
                         ),
                         {},
                     )
-                signed = prev.get("signed")
-                if signed:
-                    status = "Signed"
-                elif finalized:
-                    status = "Awaiting HSE signature"
-                else:
+                hse_signed = prev.get("signed")
+                admin_signed = prev.get("admin_signed")
+                if not finalized:
                     status = "Compiling"
-                generated_at = None
-                if finalized:
+                    hse_signed = None
+                    admin_signed = None
+                    generated_at = None
+                else:
+                    status = self._weekly_signature_status(
+                        hse_signed=bool(hse_signed),
+                        admin_signed=bool(admin_signed),
+                    )
                     generated_at = datetime(
                         compile_day.year,
                         compile_day.month,
@@ -5538,9 +5688,6 @@ class PlatformStore:
                         minute,
                         tzinfo=AST,
                     ).isoformat()
-                # Signed stays signed; otherwise follow the schedule even with 0 cases.
-                if signed or str(prev.get("status") or "") == "Signed":
-                    status = "Signed"
                 compile_notified_at = prev.get("compile_notified_at")
                 if not finalized:
                     compile_notified_at = None
@@ -5553,7 +5700,8 @@ class PlatformStore:
                     "status": status,
                     "a": a,
                     "b": b,
-                    "signed": signed,
+                    "signed": hse_signed,
+                    "admin_signed": admin_signed,
                     "issued": prev.get("issued"),
                     "generated_at": prev.get("generated_at") or generated_at,
                     "compile_notified_at": compile_notified_at,
@@ -5600,7 +5748,7 @@ class PlatformStore:
             month_label = month_start.strftime("%B %Y")
             a = month_start.isoformat()
             b = month_end.isoformat()
-            for index, name in enumerate(projects):
+            for index, name in enumerate(self._report_scopes(projects)):
                 code = self._project_code(name, index)
                 report_id = (
                     f"MR-{month_start.year}-{month_start.month:02d}-{code}"
@@ -5663,6 +5811,16 @@ class PlatformStore:
             return None
         return {"name": name, "email": email}
 
+    def _admin_notify_inbox(self) -> dict | None:
+        """Single Admin inbox for weekly co-sign email notices (test override wins)."""
+        settings = self.get_platform_settings()
+        test = str(settings.get("reportTestEmail") or "").strip()
+        name = str(settings.get("reportAdminName") or "Admin").strip() or "Admin"
+        email = test or str(settings.get("reportAdminEmail") or "").strip()
+        if not email:
+            return None
+        return {"name": name, "email": email}
+
     def _pm_notify_inbox(self, scope: str) -> dict | None:
         """Project PM inbox for that scope (test override wins)."""
         settings = self.get_platform_settings()
@@ -5678,7 +5836,7 @@ class PlatformStore:
     def _dispatch_compile_notifications(self, packets: list[dict]) -> list[dict]:
         """Email when weekly/monthly packets first become awaiting signature.
 
-        - Weekly: one HSE email covering all newly compiled weekly packs.
+        - Weekly: one HSE digest + one Admin digest (single configured Admin email).
         - Monthly: one HSE email for all new packs + one PM email per project.
         """
         from app.services.report_mail import send_report_ready_notice
@@ -5710,32 +5868,53 @@ class PlatformStore:
 
         settings = self.get_platform_settings()
         notify_hse = self._setting_bool(settings, "notifyHSE", True)
+        notify_admin = self._setting_bool(settings, "notifyAdmin", True)
 
-        # --- Weekly: single HSE digest ---
+        # --- Weekly: HSE digest + single Admin digest ---
         if newly_weekly:
+            deliveries: list[dict] = []
+            report_payload = [
+                {
+                    "id": p.get("id"),
+                    "scope": p.get("scope"),
+                    "label": p.get("label"),
+                }
+                for p in newly_weekly
+            ]
             hse = self._hse_notify_inbox() if notify_hse else None
             if hse:
                 try:
-                    delivery = send_report_ready_notice(
-                        to_email=hse["email"],
-                        to_name=hse["name"],
-                        kind="weekly",
-                        role_hint="Dept HSE",
-                        reports=[
-                            {
-                                "id": p.get("id"),
-                                "scope": p.get("scope"),
-                                "label": p.get("label"),
-                            }
-                            for p in newly_weekly
-                        ],
+                    deliveries.append(
+                        send_report_ready_notice(
+                            to_email=hse["email"],
+                            to_name=hse["name"],
+                            kind="weekly",
+                            role_hint="Dept HSE",
+                            reports=report_payload,
+                        )
                     )
-                    mark(newly_weekly, [delivery])
                 except Exception:
                     pass
             elif not notify_hse:
-                # Still mark so we don't spam once the toggle is turned back on.
-                mark(newly_weekly, [{"mode": "skipped", "reason": "notifyHSE off"}])
+                deliveries.append({"mode": "skipped", "reason": "notifyHSE off"})
+            admin_inbox = self._admin_notify_inbox() if notify_admin else None
+            if admin_inbox:
+                try:
+                    deliveries.append(
+                        send_report_ready_notice(
+                            to_email=admin_inbox["email"],
+                            to_name=admin_inbox["name"],
+                            kind="weekly",
+                            role_hint="Admin",
+                            reports=report_payload,
+                        )
+                    )
+                except Exception:
+                    pass
+            elif not notify_admin:
+                deliveries.append({"mode": "skipped", "reason": "notifyAdmin off"})
+            if deliveries:
+                mark(newly_weekly, deliveries)
 
         # --- Monthly: one HSE digest + one PM email per project ---
         if newly_monthly:
@@ -5764,7 +5943,13 @@ class PlatformStore:
                 deliveries: list[dict] = []
                 if hse_delivery:
                     deliveries.append(hse_delivery)
-                pm = self._pm_notify_inbox(str(item.get("scope") or ""))
+                # All-projects monthly packs are HSE-facing; skip per-project PM mail.
+                scope_name = str(item.get("scope") or "")
+                pm = (
+                    None
+                    if scope_name == "All projects"
+                    else self._pm_notify_inbox(scope_name)
+                )
                 if pm:
                     try:
                         deliveries.append(
@@ -5845,16 +6030,41 @@ class PlatformStore:
                     raise ValueError("This report has not been generated and cannot be signed yet.")
                 kind = item.get("kind")
                 if kind == "weekly":
-                    if role != "dept_hse":
-                        raise ValueError("Only Dept HSE can sign weekly reports.")
-                    if item.get("signed"):
-                        raise ValueError("This weekly report is already signed.")
-                    item["signed"] = {
+                    if role not in {"dept_hse", "admin"}:
+                        raise ValueError(
+                            "Only Dept HSE or Admin can sign weekly reports."
+                        )
+                    if str(item.get("status") or "") == "Compiling":
+                        raise ValueError(
+                            "This weekly report is still compiling and cannot be signed yet."
+                        )
+                    if (
+                        str(item.get("status") or "") == "Signed"
+                        and item.get("signed")
+                        and item.get("admin_signed")
+                    ):
+                        raise ValueError("This weekly report is already fully signed.")
+                    stamp = {
                         "by": actor,
                         "signature": sig,
                         "at": datetime.now(timezone.utc).isoformat(),
                     }
-                    item["status"] = "Signed"
+                    if role == "dept_hse":
+                        if item.get("signed"):
+                            raise ValueError(
+                                "This weekly report is already signed by Dept HSE."
+                            )
+                        item["signed"] = stamp
+                    else:
+                        if item.get("admin_signed"):
+                            raise ValueError(
+                                "This weekly report is already signed by Admin."
+                            )
+                        item["admin_signed"] = stamp
+                    item["status"] = self._weekly_signature_status(
+                        hse_signed=bool(item.get("signed")),
+                        admin_signed=bool(item.get("admin_signed")),
+                    )
                     self._save_report_packets(packets)
                     return item
                 if kind == "monthly":
@@ -5902,7 +6112,11 @@ class PlatformStore:
         rows = [
             row
             for row in self.list_cases()
-            if (not scope or row.get("project") == scope)
+            if (
+                not scope
+                or scope == "All projects"
+                or row.get("project") == scope
+            )
             and a
             and b
             and a <= str(row.get("date") or "") <= b
@@ -5951,7 +6165,11 @@ class PlatformStore:
         rows = [
             row
             for row in self.list_cases()
-            if (not scope or row.get("project") == scope)
+            if (
+                not scope
+                or scope == "All projects"
+                or row.get("project") == scope
+            )
             and a
             and b
             and a <= str(row.get("date") or "") <= b
@@ -6189,7 +6407,7 @@ class PlatformStore:
         notify_op = self._setting_bool(settings, "notifyOperator", True)
         notify_admin = self._setting_bool(settings, "notifyAdmin", True)
         notify_hse = self._setting_bool(settings, "notifyHSE", True)
-        # Admin: overdue + escalated (all records in scope)
+        # Admin: overdue + escalated + weekly reports awaiting Admin co-sign
         # Dept HSE: escalated + compiled weekly/monthly report notices
         # Operator: due soon / overdue / escalated for records THEY registered only
         # Project PM (receiver): monthly reports awaiting signature only
@@ -6207,6 +6425,8 @@ class PlatformStore:
                 if notify_admin
                 else []
             )
+            if notify_admin:
+                items.extend(self._admin_report_ready_notifications(user))
         elif role == "operator":
             if not notify_op:
                 items = []

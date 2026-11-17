@@ -1212,16 +1212,15 @@ export function WeatherScreen() {
   async function saveStationReadings(st: WeatherStation) {
     setSavingStationId(st.id);
     try {
-      // Only persist hours that are due. Never convert upcoming → missing,
-      // or save unlocks the rest of the day after one reading.
+      // Persist only hours the operator edited this session. Logged-by is
+      // stamped per edited hour — never bulk-filled across the whole day.
       const currentUser = formatUserLabel(user) || user?.username || "";
       const editKey = `${st.id}|${logDate}`;
       const hourEdits = logEdits[editKey] || {};
       const readings = WEATHER_DAY_HOURS.map((hour) => {
+        if (!(hour in hourEdits)) return null;
         const row = rowFor(st, hour);
-        const touched = hour in hourEdits;
-        // Preserve prior logger for untouched hours; stamp current user on edits/new.
-        const hourLogger = touched || !row.loggedBy ? currentUser : row.loggedBy;
+        if (row.status === "upcoming") return null;
         return {
           hour,
           wind: row.wind ?? null,
@@ -1233,9 +1232,14 @@ export function WeatherScreen() {
           heat_index: row.heatIndex ?? null,
           remarks: row.remarks ?? null,
           status: row.status,
-          logged_by: hourLogger || null,
+          logged_by: currentUser || null,
         };
-      }).filter((row) => row.status !== "upcoming");
+      }).filter((row): row is NonNullable<typeof row> => row != null);
+      if (!readings.length) {
+        setSavedFlash("Enter at least one hour before saving");
+        window.setTimeout(() => setSavedFlash(null), 2200);
+        return;
+      }
       const res = await saveWeatherHourly({
         station_id: st.id,
         project: st.project,
@@ -1742,7 +1746,13 @@ export function WeatherScreen() {
                           row.heatIndex,
                           row.remarks,
                         ].some((v) => v != null && String(v).trim() !== "");
-                      const loggedByDisplay = row.loggedBy || (hasReading ? currentUser : "");
+                      const hourTouched = Boolean(
+                        logEdits[`${st.id}|${logDate}`]?.[hour],
+                      );
+                      // Preview current user only on hours edited this session;
+                      // otherwise show the saved logger for that hour alone.
+                      const loggedByDisplay =
+                        row.loggedBy || (hourTouched && hasReading ? currentUser : "");
                       return (
                         <tr key={hour} className={current ? "is-current" : undefined}>
                           <td className="wx-time">{row.timeLabel}</td>
@@ -1806,7 +1816,7 @@ export function WeatherScreen() {
                                   title={
                                     row.loggedBy
                                       ? `Saved by ${row.loggedBy}`
-                                      : hasReading
+                                      : hourTouched && hasReading
                                         ? "Will save as you when you click Save readings"
                                         : undefined
                                   }

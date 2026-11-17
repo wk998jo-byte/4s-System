@@ -16,6 +16,7 @@ import {
   type CaseSummary,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
+import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useChartReveal } from "../lib/useChartReveal";
 import {
@@ -54,6 +55,15 @@ const ITQAN_STATUSES = [
   "Under HR Action",
   "Under Payroll",
   "Under Announcement",
+  "Finished",
+] as const;
+
+/** Banner row only — workflow/status lists keep ITQAN_STATUSES order. */
+const ITQAN_BANNER_STATUSES = [
+  "Under Announcement",
+  "Under Safety",
+  "Under HR Action",
+  "Under Payroll",
   "Finished",
 ] as const;
 
@@ -823,7 +833,7 @@ function Thumb({ row }: { row: CaseSummary }) {
   if (src) {
     return (
       <span className="ai-thumb" aria-hidden>
-        <img src={src} alt="" loading="lazy" />
+        <SecureMediaImg src={src} alt="" loading="lazy" />
       </span>
     );
   }
@@ -1395,7 +1405,7 @@ export function ItqanScreen({
           value={scoped.length}
           sub="recorded in ITQAN"
         />
-        {ITQAN_STATUSES.map((s) => (
+        {ITQAN_BANNER_STATUSES.map((s) => (
           <KpiTile
             key={s}
             title={s}

@@ -244,6 +244,48 @@ def test_confirm_driver_sets_under_process() -> None:
     assert closed["fields"]["close_out_action"] == "The Violation has been uploaded in ITQAN"
 
 
+def test_confirm_driver_preserves_reported_by_and_credits_uploader() -> None:
+    """Registrant stays on reported_by; confirm actor is uploaded_by only."""
+    from datetime import date, time
+
+    from app.schemas.scc import ConfirmDriver, SpeedCreate
+
+    store = PlatformStore()
+    created = store.create_speed(
+        SpeedCreate(
+            assign_to="project",
+            project_id=store.catalog.get("project")[0]["id"],
+            speed_violation_type_id=store.catalog.get("speed_violation_type")[0]["id"],
+            vehicle_type_id=store.catalog.get("vehicle_type")[0]["id"],
+            model_id=store.catalog.get("model")[0]["id"],
+            asset_number="007-02-359",
+            driver_name="Rajdev Yadav",
+            driver_badge_number="12191",
+            location_coordinates="26.1,50.1",
+            occurred_on=date.today(),
+            occurred_time=time(5, 54),
+            permitted_speed_kmh=80,
+            vehicle_speed_kmh=86,
+            reported_by="50200 - Safiah Josh",
+        )
+    )
+    confirmed = store.confirm_driver(
+        created["id"],
+        "speed",
+        ConfirmDriver(itqan_proof="itqan.png", uploaded_by="50253 - Fajr AlAmer"),
+        actor="50253 - Fajr AlAmer",
+    )
+    assert confirmed is not None
+    assert confirmed["fields"]["reported_by"] == "50200 - Safiah Josh"
+    assert confirmed["fields"]["uploaded_by"] == "50253 - Fajr AlAmer"
+    itq_id = confirmed["fields"].get("itqan_case_id")
+    assert itq_id
+    itq = store.get_case(itq_id)
+    assert itq is not None
+    assert itq["fields"]["reported_by"] == "50200 - Safiah Josh"
+    assert itq["fields"]["uploaded_by"] == "50253 - Fajr AlAmer"
+
+
 def test_sqlite_file_survives_new_store(tmp_path) -> None:
     from datetime import date, time
 

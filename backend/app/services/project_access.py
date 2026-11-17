@@ -63,9 +63,15 @@ def can_view_transfer(user: dict | None, transfer: dict) -> bool:
 
 
 def can_view_report(user: dict | None, packet: dict) -> bool:
+    """Daily / weekly / monthly packs share the same project-access rules.
+
+    Unrestricted users see every pack (including ``All projects``).
+    Scoped users only see packs whose ``scope`` matches an assigned project —
+    never the shared ``All projects`` pack.
+    """
     if project_scope(user) is None:
         return True
-    # Daily packets require a scoped projection at the response boundary.
-    if packet.get("kind") == "daily":
-        return bool(project_scope(user))
-    return can_access_project(user, packet.get("scope"))
+    scope = packet.get("scope")
+    if scope == "All projects":
+        return False
+    return can_access_project(user, scope)
