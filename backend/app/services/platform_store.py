@@ -49,6 +49,13 @@ from app.services.project_access import (
     has_explicit_all_projects,
     project_scope,
 )
+from app.services.itqan_import import (
+    itqan_violation_label,
+    normalise_badge,
+    parse_itqan_sheet,
+    parse_violation_datetime,
+    source_type_for_violation,
+)
 from app.services.uploads import ensure_demo_image
 from app.services.week import week_from_date
 
@@ -57,7 +64,7 @@ try:
 except ZoneInfoNotFoundError:
     AST = timezone(timedelta(hours=3))
 ITQAN_CLOSE_OUT = "The Violation has been uploaded in ITQAN"
-ITQAN_STATUS_DEFAULT = "Under Safety"
+ITQAN_STATUS_DEFAULT = "Under Announcement"
 ITQAN_SOURCE_LABELS = {
     "dashcam": "Dashcam Observation",
     "speed": "Speed Violation",
@@ -1857,8 +1864,21 @@ class PlatformStore:
                 raise ValueError("Close-out can only be submitted while the record is Open.")
             record["status"] = "under_process"
             record["fields"]["hseo_name_badge"] = payload.hseo_name_badge.strip()
-            record["fields"]["close_out_action"] = payload.close_out_action.strip()
-            record["fields"]["close_out_picture"] = payload.close_out_picture.strip()
+            category = str(record["fields"].get("category") or "").strip().lower()
+            positive = category.startswith("positive")
+            if positive:
+                # Positive observations close with the HSEO name only.
+                record["fields"]["close_out_action"] = "Positive observation"
+                record["fields"]["close_out_picture"] = None
+            else:
+                action = (getattr(payload, "close_out_action", None) or "").strip()
+                picture = (getattr(payload, "close_out_picture", None) or "").strip()
+                if not action:
+                    raise ValueError("Close-out action is required.")
+                if not picture:
+                    raise ValueError("Close-out picture is required.")
+                record["fields"]["close_out_action"] = action
+                record["fields"]["close_out_picture"] = picture
             record["fields"]["close_out_submitted_by"] = actor or "Operator"
             # Resubmit after Admin return → clear prior reject notice.
             record["fields"].pop("reject_reason", None)
@@ -1939,25 +1959,9 @@ class PlatformStore:
             fields.pop("rejected_at", None)
             record["status"] = "under_process"
 
-        updated = self._patch_case(case_id, record_type, mutate)
-        if (
-            updated
-            and bool((updated.get("fields") or {}).get("upload_to_itqan", True))
-            and not (updated.get("fields") or {}).get("itqan_case_id")
-        ):
-            itq = self._create_itqan_from_source(updated, actor=actor)
-            if itq:
-
-                def link(record: dict) -> None:
-                    record["fields"]["itqan_case_id"] = itq["id"]
-                    record["fields"]["itqan_ref"] = (itq.get("fields") or {}).get(
-                        "itqan_ref"
-                    )
-
-                self._patch_case(case_id, record_type, link)
-                refreshed = self.get_case(case_id)
-                return refreshed or updated
-        return updated
+        # ITQAN records are no longer created here: they come from the ITQAN
+        # sheet import (or a manual ITQAN entry) on the ITQAN Violations page.
+        return self._patch_case(case_id, record_type, mutate)
 
     def _assert_unique_itqan_ref(
         self, itqan_ref: str, *, exclude_id: str | None = None
@@ -2070,68 +2074,415 @@ class PlatformStore:
 
         return self._patch_case(case_id, "itqan", mutate)
 
-    def _create_itqan_from_source(
-        self, source: dict, actor: str | None = None
-    ) -> dict | None:
-        fields = dict(source.get("fields") or {})
-        if fields.get("itqan_case_id"):
-            return None
-        source_type = source.get("record_type")
-        if source_type not in {"dashcam", "speed"}:
-            return None
-        violation = self._itqan_violation_from_source(source)
-        vehicle = str(fields.get("vehicle_type") or "Light Vehicle")
-        itqan_ref = str(fields.get("itqan_ref") or "").strip() or self.next_itqan_ref()
-        itqan_status = ITQAN_STATUS_DEFAULT
-        occurred = date.fromisoformat(source["date"])
-        year, week = week_from_date(occurred)
-        time_raw = str(fields.get("occurred_time") or "00:00")
-        confirmed = fields.get("confirmed_at") or datetime.now(timezone.utc).isoformat()
-        proof = (fields.get("itqan_upload_proof") or "").strip() or None
-        if proof and not (
-            proof.startswith("/uploads/")
-            or proof.startswith("http")
-            or proof.startswith("data:")
-        ):
-            proof = ensure_demo_image(
-                proof.rsplit(".", 1)[0] or f"itqan-from-{source.get('case_id')}",
-                hue=25 + (hash(source.get("case_id") or "") % 80),
-            )
-        record = {
+    @staticmethod
+    def _itqan_scope_from_sheet(raw: str) -> tuple[str | None, str | None]:
+        """Split the sheet's free-text Project column into (project, department)."""
+        text = (raw or "").strip()
+        if not text or text.lower() in {"null", "n/a", "na", "none", "-"}:
+            return None, None
+        low = text.lower()
+        if any(word in low for word in ("department", "section", "division", "workshop")):
+            return None, text
+        return text, None
+
+    def _build_itqan_record(
+        self,
+        *,
+        case_id: str,
+        ref: str,
+        status_label: str,
+        sheet: dict,
+        occurred: datetime,
+        source: dict | None,
+        actor: str | None,
+    ) -> dict:
+        """ITQAN record for an imported sheet row.
+
+        When a Dashcam/Speed record was matched the record looks exactly like the
+        previous auto-linked ones (source link, proof, reporter/uploader);
+        otherwise it is built from the sheet alone.
+        """
+        sheet_type = source_type_for_violation(sheet.get("violation_type", ""))
+        now = datetime.now(timezone.utc)
+        occurred_utc = occurred.replace(tzinfo=AST).astimezone(timezone.utc)
+        extra = {
+            "imported_from_sheet": True,
+            "itqan_remark": (sheet.get("remark") or "").strip() or None,
+            "itqan_position": (sheet.get("position") or "").strip() or None,
+            "itqan_door_no": (sheet.get("door_no") or "").strip() or None,
+            "itqan_frequency": (sheet.get("frequency") or "").strip() or None,
+        }
+        if source is not None:
+            fields = dict(source.get("fields") or {})
+            source_type = source["record_type"]
+            violation = self._itqan_violation_from_source(source)
+            proof = (fields.get("itqan_upload_proof") or "").strip() or None
+            if proof and not (
+                proof.startswith("/uploads/")
+                or proof.startswith("http")
+                or proof.startswith("data:")
+            ):
+                proof = ensure_demo_image(
+                    proof.rsplit(".", 1)[0] or f"itqan-from-{source.get('case_id')}",
+                    hue=25 + (hash(source.get("case_id") or "") % 80),
+                )
+            occurred_on = date.fromisoformat(source["date"])
+            year, week = week_from_date(occurred_on)
+            return {
+                "id": str(uuid4()),
+                "case_id": case_id,
+                "record_type": "itqan",
+                "status": self._case_status_for_itqan(status_label),
+                "project": source.get("project"),
+                "department": source.get("department"),
+                "title": violation[:80],
+                "date": source["date"],
+                "week_year": year,
+                "week_number": week,
+                "risk_level": source.get("risk_level"),
+                "created_at": now,
+                "fields": {
+                    "assign_to": "project" if source.get("project") else "department",
+                    "itqan_ref": ref,
+                    "itqan_status": status_label,
+                    "violation_type": violation,
+                    "vehicle_type": str(
+                        fields.get("vehicle_type")
+                        or sheet.get("vehicle_type")
+                        or "Light Vehicle"
+                    ),
+                    "driver_name": fields.get("driver_name"),
+                    "driver_badge_number": fields.get("driver_badge_number"),
+                    "occurred_time": str(fields.get("occurred_time") or "00:00")[:5],
+                    "source": ITQAN_SOURCE_LABELS.get(source_type, source_type),
+                    "source_case_id": source["id"],
+                    "source_record_type": source_type,
+                    "source_case_label": source.get("case_id"),
+                    "itqan_upload_proof": proof,
+                    "reported_by": fields.get("reported_by") or actor or "Operator",
+                    "uploaded_by": fields.get("uploaded_by") or actor or None,
+                    "registered_at": fields.get("confirmed_at") or now.isoformat(),
+                    "linked_from": source.get("case_id"),
+                    **extra,
+                },
+            }
+        project, department = self._itqan_scope_from_sheet(sheet.get("project", ""))
+        violation = itqan_violation_label(sheet.get("violation_type", ""))
+        year, week = week_from_date(occurred.date())
+        return {
             "id": str(uuid4()),
-            "case_id": self.next_itqan_case_id(),
+            "case_id": case_id,
             "record_type": "itqan",
-            "status": self._case_status_for_itqan(itqan_status),
-            "project": source.get("project"),
-            "department": source.get("department"),
+            "status": self._case_status_for_itqan(status_label),
+            "project": project,
+            "department": department,
             "title": violation[:80],
-            "date": source["date"],
+            "date": occurred.date().isoformat(),
             "week_year": year,
             "week_number": week,
-            "risk_level": source.get("risk_level"),
-            "created_at": datetime.now(timezone.utc),
+            "risk_level": None,
+            "created_at": now,
             "fields": {
-                "assign_to": "project" if source.get("project") else "department",
-                "itqan_ref": itqan_ref,
-                "itqan_status": itqan_status,
+                "assign_to": "project" if project else "department",
+                "itqan_ref": ref,
+                "itqan_status": status_label,
                 "violation_type": violation,
-                "vehicle_type": vehicle,
-                "driver_name": fields.get("driver_name"),
-                "driver_badge_number": fields.get("driver_badge_number"),
-                "occurred_time": time_raw[:5],
-                "source": ITQAN_SOURCE_LABELS.get(source_type, source_type),
-                "source_case_id": source["id"],
-                "source_record_type": source_type,
-                "source_case_label": source.get("case_id"),
-                "itqan_upload_proof": proof,
-                # Keep the source registrant separate from who confirmed/uploaded.
-                "reported_by": fields.get("reported_by") or actor or "Operator",
-                "uploaded_by": fields.get("uploaded_by") or actor or None,
-                "registered_at": confirmed,
-                "linked_from": source.get("case_id"),
+                "vehicle_type": (sheet.get("vehicle_type") or "").strip() or "Light Vehicle",
+                "driver_name": (sheet.get("driver_name") or "").strip() or "—",
+                "driver_badge_number": (sheet.get("badge") or "").strip(),
+                "occurred_time": occurred.strftime("%H:%M"),
+                "source": ITQAN_SOURCE_LABELS.get(sheet_type, sheet_type),
+                "source_case_id": None,
+                "source_record_type": None,
+                "source_case_label": None,
+                "itqan_upload_proof": None,
+                "reported_by": actor or "Admin",
+                "uploaded_by": None,
+                "registered_at": occurred_utc.isoformat(),
+                **extra,
             },
         }
-        return self._insert_case(record)
+
+    def import_itqan_sheet(
+        self, content: bytes, filename: str = "", actor: str | None = None
+    ) -> dict:
+        """Create / update ITQAN records from an ITQAN tracking-violations sheet.
+
+        * Reference No already in ITQAN  -> status (only) is updated from the sheet.
+        * New Reference No               -> record created; linked to the confirmed
+          Dashcam/Speed record with the same driver badge and date/time (speeding
+          rows match Speed, all others Dashcam).
+        * Old auto-created ITQAN rows (ITQ-nnnnnn refs) for a matching source are
+          adopted: they get the sheet's reference and status instead of a duplicate.
+        Dashcam/Speed forms and their Uploaded / Not uploaded labels are untouched.
+        """
+        sheet_rows = parse_itqan_sheet(content, filename)
+        if not sheet_rows:
+            raise ValueError("The sheet has no ITQAN rows to import.")
+        statuses = {
+            str(item["label"]).strip().lower(): str(item["label"]).strip()
+            for item in self.catalog.get("itqan_status")
+            if item.get("is_active")
+        }
+        statuses.setdefault("closed", statuses.get("finished", "Finished"))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        by = actor or "Admin"
+        result = {
+            "total": len(sheet_rows),
+            "created": 0,
+            "linked": 0,
+            "status_updated": 0,
+            "unchanged": 0,
+            "duplicates_in_file": 0,
+            "errors": [],
+        }
+
+        def fail(row: dict, message: str) -> None:
+            if len(result["errors"]) < 100:
+                result["errors"].append(
+                    {
+                        "row": row.get("row_number"),
+                        "reference": row.get("reference") or "",
+                        "message": message,
+                    }
+                )
+
+        with self._lock, self._sessions() as session:
+            itqan_rows = (
+                session.query(CaseRow)
+                .filter(CaseRow.record_type == "itqan", CaseRow.is_deleted.is_(False))
+                .all()
+            )
+            by_ref: dict[str, CaseRow] = {}
+            by_id: dict[str, CaseRow] = {}
+            for row in itqan_rows:
+                by_id[row.id] = row
+                ref = str((row.fields or {}).get("itqan_ref") or "").strip()
+                if ref:
+                    by_ref.setdefault(ref, row)
+
+            # Confirmed Dashcam/Speed close-outs that can still be matched.
+            pool: dict[tuple[str, str], list[CaseRow]] = {}
+            for src in (
+                session.query(CaseRow)
+                .filter(
+                    CaseRow.record_type.in_(("dashcam", "speed")),
+                    CaseRow.is_deleted.is_(False),
+                )
+                .all()
+            ):
+                sf = src.fields or {}
+                if sf.get("upload_to_itqan") is False:
+                    continue
+                if not (sf.get("itqan_upload_proof") or sf.get("confirmed_at")):
+                    continue
+                linked_id = sf.get("itqan_case_id")
+                if linked_id:
+                    old = by_id.get(linked_id)
+                    old_fields = (old.fields or {}) if old else {}
+                    # Only adopt legacy auto-generated rows, never imported/manual ones.
+                    if (
+                        old is None
+                        or old_fields.get("imported_from_sheet")
+                        or not re.fullmatch(r"ITQ-\d+", str(old_fields.get("itqan_ref") or ""))
+                    ):
+                        continue
+                keys = {
+                    normalise_badge(sf.get("driver_badge_number")),
+                    normalise_badge(sf.get("iqama_number")),
+                } - {""}
+                for key in keys:
+                    pool.setdefault((src.record_type, key), []).append(src)
+            used_sources: set[str] = set()
+
+            def find_source(
+                sheet: dict, occurred: datetime, *, allow_linked: bool = True
+            ) -> CaseRow | None:
+                stype = source_type_for_violation(sheet.get("violation_type", ""))
+                best: tuple[int, CaseRow] | None = None
+                for cand in pool.get((stype, normalise_badge(sheet.get("badge"))), []):
+                    if cand.id in used_sources or cand.occurred_on != occurred.date():
+                        continue
+                    if not allow_linked and (cand.fields or {}).get("itqan_case_id"):
+                        continue
+                    raw_time = str((cand.fields or {}).get("occurred_time") or "")[:5]
+                    try:
+                        hh, mm = (int(x) for x in raw_time.split(":"))
+                        diff = abs((hh * 60 + mm) - (occurred.hour * 60 + occurred.minute))
+                    except ValueError:
+                        diff = 0 if not raw_time else 9999
+                    if diff <= 90 and (best is None or diff < best[0]):
+                        best = (diff, cand)
+                return best[1] if best else None
+
+            seq_row = session.get(AppStateRow, "itqan_case_seq")
+            seq = int(seq_row.value) if seq_row else 1100
+            yy = datetime.now(AST).year % 100
+            seen_refs: set[str] = set()
+
+            def link_source(src: CaseRow, itqan_id: str, ref: str) -> None:
+                used_sources.add(src.id)
+                sf = dict(src.fields or {})
+                sf["itqan_case_id"] = itqan_id
+                sf["itqan_ref"] = ref
+                src.fields = sf
+                flag_modified(src, "fields")
+
+            for sheet in sheet_rows:
+                ref = (sheet.get("reference") or "").strip()
+                if not ref:
+                    fail(sheet, "Reference No is missing.")
+                    continue
+                if ref in seen_refs:
+                    result["duplicates_in_file"] += 1
+                    continue
+                seen_refs.add(ref)
+                raw_status = (sheet.get("status") or "").strip()
+                status_label = statuses.get(raw_status.lower()) if raw_status else None
+                if raw_status and status_label is None:
+                    fail(sheet, f"Unknown status '{raw_status}'.")
+                    continue
+                occurred = parse_violation_datetime(sheet.get("violation_date", ""))
+                existing = by_ref.get(ref)
+
+                if existing is not None:
+                    changed = False
+                    fields = dict(existing.fields or {})
+                    if status_label and fields.get("itqan_status") != status_label:
+                        hist = list(fields.get("status_history") or [])
+                        hist.append(
+                            {
+                                "at": now_iso,
+                                "by": by,
+                                "from": fields.get("itqan_status"),
+                                "to": status_label,
+                                "via": "import",
+                            }
+                        )
+                        fields["status_history"] = hist[-40:]
+                        fields["itqan_status"] = status_label
+                        fields["itqan_status_updated_at"] = now_iso
+                        fields["itqan_status_updated_by"] = by
+                        existing.status = self._case_status_for_itqan(status_label)
+                        result["status_updated"] += 1
+                        changed = True
+                    if not fields.get("source_case_id") and occurred is not None:
+                        src = find_source(sheet, occurred, allow_linked=False)
+                        if src is not None:
+                            fields.update(
+                                {
+                                    "source_case_id": src.id,
+                                    "source_record_type": src.record_type,
+                                    "source_case_label": src.case_id,
+                                    "linked_from": src.case_id,
+                                    "source": ITQAN_SOURCE_LABELS.get(src.record_type),
+                                    "itqan_upload_proof": (src.fields or {}).get(
+                                        "itqan_upload_proof"
+                                    )
+                                    or fields.get("itqan_upload_proof"),
+                                }
+                            )
+                            link_source(src, existing.id, ref)
+                            result["linked"] += 1
+                            changed = True
+                    if changed:
+                        existing.fields = fields
+                        flag_modified(existing, "fields")
+                    else:
+                        result["unchanged"] += 1
+                    continue
+
+                if occurred is None:
+                    fail(
+                        sheet,
+                        f"Violation Date '{sheet.get('violation_date', '')}' is not "
+                        "dd/mm/yyyy hh:mm AM/PM.",
+                    )
+                    continue
+                if not (sheet.get("badge") or sheet.get("driver_name")):
+                    fail(sheet, "Violator Name / Badge No is missing.")
+                    continue
+
+                src = find_source(sheet, occurred)
+                if src is not None and src.fields.get("itqan_case_id"):
+                    # Adopt the legacy auto-created ITQAN row instead of duplicating.
+                    old = by_id[src.fields["itqan_case_id"]]
+                    fields = dict(old.fields or {})
+                    prev_status = fields.get("itqan_status")
+                    final = status_label or prev_status or ITQAN_STATUS_DEFAULT
+                    fields.update(
+                        {
+                            "itqan_ref": ref,
+                            "itqan_status": final,
+                            "imported_from_sheet": True,
+                            "itqan_remark": (sheet.get("remark") or "").strip() or None,
+                            "itqan_position": (sheet.get("position") or "").strip() or None,
+                            "itqan_door_no": (sheet.get("door_no") or "").strip() or None,
+                            "itqan_frequency": (sheet.get("frequency") or "").strip() or None,
+                        }
+                    )
+                    if prev_status != final:
+                        hist = list(fields.get("status_history") or [])
+                        hist.append(
+                            {
+                                "at": now_iso,
+                                "by": by,
+                                "from": prev_status,
+                                "to": final,
+                                "via": "import",
+                            }
+                        )
+                        fields["status_history"] = hist[-40:]
+                        fields["itqan_status_updated_at"] = now_iso
+                        fields["itqan_status_updated_by"] = by
+                        old.status = self._case_status_for_itqan(final)
+                    old.fields = fields
+                    flag_modified(old, "fields")
+                    by_ref[ref] = old
+                    link_source(src, old.id, ref)
+                    result["linked"] += 1
+                    continue
+
+                seq += 1
+                record = self._build_itqan_record(
+                    case_id=f"ITQ-{yy:02d}-{seq:04d}",
+                    ref=ref,
+                    status_label=status_label or ITQAN_STATUS_DEFAULT,
+                    sheet=sheet,
+                    occurred=occurred,
+                    source=_case_dict(src) if src is not None else None,
+                    actor=actor,
+                )
+                row = CaseRow(
+                    id=record["id"],
+                    case_id=record["case_id"],
+                    record_type="itqan",
+                    status=record["status"],
+                    project=record["project"],
+                    department=record["department"],
+                    title=record["title"],
+                    occurred_on=date.fromisoformat(record["date"]),
+                    week_year=record["week_year"],
+                    week_number=record["week_number"],
+                    risk_level=record["risk_level"],
+                    created_at=record["created_at"],
+                    is_deleted=False,
+                    fields=record["fields"],
+                )
+                session.add(row)
+                by_ref[ref] = row
+                by_id[row.id] = row
+                result["created"] += 1
+                if src is not None:
+                    link_source(src, row.id, ref)
+                    result["linked"] += 1
+
+            if seq_row:
+                seq_row.value = seq
+            else:
+                session.add(AppStateRow(key="itqan_case_seq", value=seq))
+            session.commit()
+        return result
 
     def close_sos(self, case_id: str, payload, actor: str | None = None) -> dict | None:
         def mutate(record: dict) -> None:
@@ -4939,34 +5290,7 @@ class PlatformStore:
                     flag_modified(row, "fields")
             session.commit()
 
-        # Link existing confirmed dashcam/speed rows into ITQAN.
-        with self._sessions() as session:
-            sources = (
-                session.query(CaseRow)
-                .filter(
-                    CaseRow.record_type.in_(("dashcam", "speed")),
-                    CaseRow.is_deleted.is_(False),
-                )
-                .all()
-            )
-            source_dicts = [_case_dict(r) for r in sources]
-
-        for src in source_dicts:
-            fields = src.get("fields") or {}
-            if not (fields.get("itqan_upload_proof") or fields.get("close_out_action")):
-                continue
-            if fields.get("itqan_case_id"):
-                continue
-            itq = self._create_itqan_from_source(src, actor=fields.get("uploaded_by"))
-            if not itq:
-                continue
-
-            def link(record: dict, itq_id=itq["id"], ref=(itq.get("fields") or {}).get("itqan_ref")) -> None:
-                record["fields"]["itqan_case_id"] = itq_id
-                record["fields"]["itqan_ref"] = ref
-
-            self._patch_case(src["id"], src["record_type"], link)
-
+        # Dashcam/Speed rows are no longer auto-linked into ITQAN (sheet import does that).
         projects = [item["label"] for item in self.catalog.get("project") if item.get("is_active")]
         departments = [
             item["label"] for item in self.catalog.get("department") if item.get("is_active")

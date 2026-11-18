@@ -158,8 +158,9 @@ class SosClose(BaseModel):
 
 class AiCameraCloseOut(BaseModel):
     hseo_name_badge: str = Field(..., min_length=1, max_length=200)
-    close_out_action: str = Field(..., min_length=1, max_length=4000)
-    close_out_picture: str = Field(..., min_length=1, max_length=500)
+    # Required except for Positive Observation, which only records the HSEO.
+    close_out_action: str = Field(default="", max_length=4000)
+    close_out_picture: str | None = Field(default=None, max_length=500)
     safelife_reference: str | None = Field(default=None, max_length=80)
 
 

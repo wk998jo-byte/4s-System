@@ -1169,6 +1169,13 @@ export function ReviewCloseOut({
     close_out_report: "",
   });
 
+  const positiveObservation =
+    !sos &&
+    !violation &&
+    String(detail.fields?.category ?? "")
+      .trim()
+      .toLowerCase()
+      .startsWith("positive");
   const filled = sos
     ? [
         form.alarm,
@@ -1179,11 +1186,13 @@ export function ReviewCloseOut({
       ]
     : violation
       ? [form.itqan_proof, actorName]
-      : [
-          form.hseo_name_badge.trim(),
-          form.close_out_action.trim(),
-          form.close_out_picture,
-        ];
+      : positiveObservation
+        ? [form.hseo_name_badge.trim()]
+        : [
+            form.hseo_name_badge.trim(),
+            form.close_out_action.trim(),
+            form.close_out_picture,
+          ];
   const remaining = filled.length - filled.filter(Boolean).length;
   async function submit() {
     if (saving) return;
@@ -1215,8 +1224,8 @@ export function ReviewCloseOut({
             })
           : await closeOutAiCamera(detail.id, {
               hseo_name_badge: form.hseo_name_badge,
-              close_out_action: form.close_out_action,
-              close_out_picture: form.close_out_picture,
+              close_out_action: positiveObservation ? "" : form.close_out_action,
+              close_out_picture: positiveObservation ? null : form.close_out_picture,
               safelife_reference: form.safelife_reference.trim() || null,
             });
       onDone(asCaseDetail(updated));
@@ -1236,7 +1245,9 @@ export function ReviewCloseOut({
           ? "Alarm type and all four close-out fields are required. Submitting close-out sets this SOS alert to Closed."
           : violation
             ? "Confirm Driver and the ITQAN proof are required. This prototype does not call ITQAN."
-            : "HSEO name, action taken, and a close-out picture are required."}
+            : positiveObservation
+              ? "Positive observation — only the Safety Officer name and badge are required."
+              : "HSEO name, action taken, and a close-out picture are required."}
       </p>
       {sos ? (
         <>
@@ -1359,6 +1370,8 @@ export function ReviewCloseOut({
               }
             />
           </label>
+          {positiveObservation ? null : (
+            <>
           <label>
             Close-out Action *
             <textarea
@@ -1389,6 +1402,8 @@ export function ReviewCloseOut({
               </span>
             </span>
           </label>
+            </>
+          )}
           <label>
             SafeLife reference number
             <input
@@ -1535,6 +1550,13 @@ export function ReviewScreen({
     }
   }, []);
 
+  // Linked ITQAN rows stay in the database and on the ITQAN page.
+  // Review & Records only lists the source cases (Dashcam, Speed, and the rest).
+  const reviewRows = useMemo(
+    () => rows.filter((row) => row.record_type !== "itqan"),
+    [rows],
+  );
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -1557,9 +1579,9 @@ export function ReviewScreen({
   }, [caseId]);
 
   useEffect(() => {
-    if (!caseId || focusApplied || rows.length === 0) return;
+    if (!caseId || focusApplied || reviewRows.length === 0) return;
     const q = caseId.trim().toLowerCase();
-    const matches = rows.filter((item) => {
+    const matches = reviewRows.filter((item) => {
       const id = String(item.id || "").toLowerCase();
       const cid = String(item.case_id || "").toLowerCase();
       return id === q || cid === q || cid.includes(q) || id.includes(q);
@@ -1577,12 +1599,14 @@ export function ReviewScreen({
       setOpenRecordId(row.id);
     }
     setFocusApplied(true);
-  }, [caseId, focusApplied, rows]);
+  }, [caseId, focusApplied, reviewRows]);
 
-  const filteredBase = rows.filter((row) => {
+  const filteredBase = reviewRows.filter((row) => {
     if (type) {
-      const allowed = new Set(type.split(",").filter(Boolean));
-      if (!allowed.has(row.record_type)) return false;
+      const allowed = new Set(
+        type.split(",").filter((value) => value && value !== "itqan"),
+      );
+      if (allowed.size && !allowed.has(row.record_type)) return false;
     }
     if (overdueOnly && !isReviewOverdue(row)) return false;
     if (scope.startsWith("project:")) {
@@ -1616,14 +1640,14 @@ export function ReviewScreen({
   });
 
   const underReviewByType = useMemo(() => {
-    const waiting = rows.filter((row) => row.status === "under_process");
+    const waiting = reviewRows.filter((row) => row.status === "under_process");
     return {
       ai_camera: waiting.filter((row) => row.record_type === "ai_camera").length,
       dashcam: waiting.filter((row) => row.record_type === "dashcam").length,
       speed: waiting.filter((row) => row.record_type === "speed").length,
-      overdue: rows.filter((row) => isReviewOverdue(row)).length,
+      overdue: reviewRows.filter((row) => isReviewOverdue(row)).length,
     };
-  }, [rows]);
+  }, [reviewRows]);
 
   const visible = status
     ? filteredBase.filter((row) => row.status === status)
@@ -1647,7 +1671,7 @@ export function ReviewScreen({
     setPage(1);
   }, [status, type, overdueOnly, scope, search]);
 
-  const openRecordType = rows.find((row) => row.id === openRecordId)?.record_type ?? null;
+  const openRecordType = reviewRows.find((row) => row.id === openRecordId)?.record_type ?? null;
 
   const closeRecord = () => {
     // Keep ?case= / local search as-is so opening a record and closing it
@@ -1794,7 +1818,6 @@ export function ReviewScreen({
             <option value="dashcam">DashCam Observation</option>
             <option value="speed">Speed Violation</option>
             <option value="sos">SOS Alert</option>
-            <option value="itqan">ITQAN Violation</option>
           </select>
           <select
             className="sel"

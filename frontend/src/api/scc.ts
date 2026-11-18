@@ -496,6 +496,45 @@ export async function downloadHwRegisterTemplate() {
   URL.revokeObjectURL(url);
 }
 
+export interface ItqanImportResult {
+  total: number;
+  created: number;
+  linked: number;
+  status_updated: number;
+  unchanged: number;
+  duplicates_in_file: number;
+  errors: Array<{ row: number | null; reference: string; message: string }>;
+}
+
+export async function downloadItqanImportTemplate() {
+  const { getToken } = await import("../auth/session");
+  const { getApiBaseUrl, joinUrl } = await import("./client");
+  const token = getToken();
+  const response = await fetch(
+    joinUrl(getApiBaseUrl(), "/api/v1/itqan-violations/import-template"),
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!response.ok) {
+    throw new Error("Could not download the ITQAN import template.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ITQAN_Violations_Import_Template.xlsx";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export const importItqanSheet = (file: File) => {
+  const body = new FormData();
+  body.append("file", file);
+  return request<ItqanImportResult>("/api/v1/itqan-violations/import", {
+    method: "POST",
+    body,
+  });
+};
+
 export const importHwRegister = (file: File) => {
   const body = new FormData();
   body.append("file", file);
