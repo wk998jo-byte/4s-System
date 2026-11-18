@@ -1984,6 +1984,7 @@ export function DashcamScreen({
         "Risk",
         "Status",
         "ITQAN",
+        "Reported by",
       ].join(","),
       ...logRows.map((r) =>
         [
@@ -2001,6 +2002,7 @@ export function DashcamScreen({
           r.risk_level || "",
           statusLabel(r.status),
           itqanLabel(r),
+          field(r, "reported_by"),
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(","),
@@ -2355,6 +2357,7 @@ export function DashcamScreen({
                 <th>Risk</th>
                 <th>Status</th>
                 <th>ITQAN</th>
+                <th>Reported by</th>
                 <th>SLA</th>
               </tr>
             </thead>
@@ -2420,6 +2423,9 @@ export function DashcamScreen({
                           {itqanLabel(r)}
                         </span>
                       </td>
+                      <td title={field(r, "reported_by") || undefined}>
+                        {field(r, "reported_by") || "—"}
+                      </td>
                       <td>
                         {!sla ? (
                           r.status === "closed" || r.status === "under_process" ? (
@@ -2440,7 +2446,7 @@ export function DashcamScreen({
                 })
               ) : (
                 <tr>
-                  <td colSpan={12} className="empty">
+                  <td colSpan={13} className="empty">
                     No records match these filters.
                   </td>
                 </tr>

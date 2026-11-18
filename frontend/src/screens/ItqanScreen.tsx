@@ -8,12 +8,15 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
+  downloadItqanImportTemplate,
   fetchCases,
+  importItqanSheet,
   notifyCasesChanged,
   postJson,
   resolveMediaUrl,
   type CaseDetail,
   type CaseSummary,
+  type ItqanImportResult,
 } from "../api/scc";
 import { useAuth } from "../auth/AuthContext";
 import { SecureMediaImg } from "../components/SecureMediaImg";
@@ -882,9 +885,11 @@ function ItqanNewDrawer({
 
   useEffect(() => {
     if (!open) return;
-    const underSafety = statuses.items.find((i) => i.label === "Under Safety");
-    if (underSafety && !form.itqan_status_id) {
-      setForm((c) => ({ ...c, itqan_status_id: underSafety.id }));
+    const underAnnouncement = statuses.items.find(
+      (i) => i.label === "Under Announcement",
+    );
+    if (underAnnouncement && !form.itqan_status_id) {
+      setForm((c) => ({ ...c, itqan_status_id: underAnnouncement.id }));
     }
   }, [open, statuses.items, form.itqan_status_id]);
 
@@ -1138,6 +1143,156 @@ function ItqanNewDrawer({
   );
 }
 
+function ItqanImportDialog({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ItqanImportResult | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setFile(null);
+    setResult(null);
+    setError(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  async function onTemplate() {
+    setError(null);
+    try {
+      await downloadItqanImportTemplate();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function onImport() {
+    if (!file || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await importItqanSheet(file);
+      setResult(res);
+      onImported();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="scrim"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="drawer drawer-page" role="dialog" aria-modal="true" aria-label="Import ITQAN cases">
+        <div className="drawer-hd">
+          <div>
+            <div className="sub">SCC Platform / ITQAN Violations</div>
+            <h2>Import ITQAN cases</h2>
+          </div>
+          <button type="button" className="iconbtn" aria-label="Close" onClick={onClose}>
+            <Icon name="x" size={18} />
+          </button>
+        </div>
+        <div className="drawer-body">
+          <section className="v1-card">
+            <h3>Upload the ITQAN sheet</h3>
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
+              Upload the ITQAN tracking-violations export (.xls / .xlsx). Each row becomes an ITQAN
+              record with the status from the sheet. Rows are linked to the Dashcam / Speed close-out
+              with the same driver badge and date/time (speeding rows to Speed Violations, all other
+              rows to Dashcam Observations). Re-importing an existing Reference No only updates its
+              status.
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button type="button" className="btn" onClick={() => void onTemplate()}>
+                Download template
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xls,.xlsx,.xlsm,.csv"
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  setResult(null);
+                }}
+              />
+            </div>
+            {error ? (
+              <p role="alert" style={{ marginTop: 10, color: "var(--danger, #b3261e)" }}>
+                {error}
+              </p>
+            ) : null}
+            {result ? (
+              <div style={{ marginTop: 14 }} role="status">
+                <strong>Import finished</strong>
+                <ul style={{ margin: "6px 0 0 18px", fontSize: 13 }}>
+                  <li>{fmtN(result.total)} rows read</li>
+                  <li>{fmtN(result.created)} new ITQAN records created</li>
+                  <li>{fmtN(result.linked)} linked to Dashcam / Speed records</li>
+                  <li>{fmtN(result.status_updated)} existing records had their status updated</li>
+                  <li>{fmtN(result.unchanged)} unchanged</li>
+                  {result.duplicates_in_file ? (
+                    <li>{fmtN(result.duplicates_in_file)} duplicate references in the file skipped</li>
+                  ) : null}
+                  <li>{fmtN(result.errors.length)} rows skipped with errors</li>
+                </ul>
+                {result.errors.length ? (
+                  <ul style={{ margin: "8px 0 0 18px", fontSize: 12.5, maxHeight: 180, overflow: "auto" }}>
+                    {result.errors.map((e, i) => (
+                      <li key={i}>
+                        Row {e.row ?? "?"}
+                        {e.reference ? ` (${e.reference})` : ""}: {e.message}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        </div>
+        <div className="formbar">
+          <span className={`msg${file ? " ok" : ""}`}>
+            {file ? file.name : "Choose the ITQAN sheet to import"}
+          </span>
+          <span className="sp" />
+          <button type="button" className="btn sm" onClick={onClose}>
+            {result ? "Close" : "Cancel"}
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!file || busy}
+            onClick={() => void onImport()}
+          >
+            {busy ? "Importing…" : "Import"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ItqanScreen({
   openForm = false,
   focusCaseId,
@@ -1147,6 +1302,8 @@ export function ItqanScreen({
 }) {
   const { user } = useAuth();
   const canRegister = Boolean(user?.capabilities.register);
+  const canImport = user?.role === "admin";
+  const [importOpen, setImportOpen] = useState(false);
   const year = bannerYear();
   const projectList = useList("project");
   const departmentList = useList("department");
@@ -1295,6 +1452,11 @@ export function ItqanScreen({
           <span className="logo-chip itq">
             ITQ<em>A</em>N
           </span>
+          {canImport ? (
+            <button type="button" className="btn" onClick={() => setImportOpen(true)}>
+              Import ITQAN cases
+            </button>
+          ) : null}
           {canRegister ? (
             <button type="button" className="btn primary" onClick={() => setDrawerOpen(true)}>
               <Icon name="plus" size={14} /> New ITQAN entry
@@ -1466,7 +1628,7 @@ export function ItqanScreen({
         <article className="v1-card">
           <h3>By source</h3>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
-            Dashcam and Speed violations flow in at Confirm Driver &amp; Submit
+            Dashcam and Speed violations are linked when the ITQAN sheet is imported
           </p>
           <HBarList entries={sourceBars} color={PAL.steel} />
         </article>
@@ -1592,6 +1754,14 @@ export function ItqanScreen({
           setDrawerOpen(false);
           notifyCasesChanged();
           void load().then(() => setOpenRecordId(row.id));
+        }}
+      />
+      <ItqanImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          notifyCasesChanged();
+          void load();
         }}
       />
       <ItqanRecordDrawer

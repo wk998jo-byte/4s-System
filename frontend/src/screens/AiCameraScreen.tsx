@@ -772,6 +772,17 @@ function BarsList({
   );
 }
 
+/** Axis label for Observations per operator — first name only. */
+function opsChartFirstName(raw: string) {
+  const s = (raw || "").trim();
+  if (!s) return "Unknown";
+  const dashed = s.match(/^\d[\d\s]*[-–—]\s*(.+)$/);
+  const fullName =
+    dashed?.[1]?.trim() ||
+    (s.includes(" - ") ? s.slice(s.indexOf(" - ") + 3).trim() : s);
+  return (fullName || s).split(/\s+/)[0] || s;
+}
+
 function OpsChart({ entries }: { entries: [string, number][] }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
@@ -815,7 +826,7 @@ function OpsChart({ entries }: { entries: [string, number][] }) {
           const x = pad.l + i * (iw / entries.length) + 4;
           const y = pad.t + ih - h;
           const fill = i === 0 ? PAL.red : i < 3 ? PAL.copper : PAL.steel;
-          const name = k.split(/\s+/)[0] || k;
+          const name = opsChartFirstName(k);
           return (
             <g key={k}>
               {v > 0 ? (

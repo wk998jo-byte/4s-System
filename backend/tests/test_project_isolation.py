@@ -264,8 +264,11 @@ def test_authorized_receipt_and_dual_signature_workflow(gate):
     assert response.status_code == 200
     assert response.json()["status"] == "received"
     weekly = objects["weekly_Yanbu"]["id"]
+    # Weekly reports need the HSE and the Admin co-signature.
     assert client.post(f"/api/v1/reports/{weekly}/sign", headers=headers["hse_a"],
-                       json={"signature_image": "test-hse.png"}).json()["status"] == "Signed"
+                       json={"signature_image": "test-hse.png"}).json()["status"] == "Awaiting Admin signature"
+    assert client.post(f"/api/v1/reports/{weekly}/sign", headers=headers["admin"],
+                       json={"signature_image": "test-admin.png"}).json()["status"] == "Signed"
     monthly = objects["monthly_Yanbu"]["id"]
     first = client.post(f"/api/v1/reports/{monthly}/sign", headers=headers["hse_a"],
                         json={"signature_image": "test-hse.png"})

@@ -32,6 +32,10 @@ const MON3 = [
   "Dec",
 ];
 
+function isPositiveObservation(row: CaseDetail) {
+  return field(row, "category").trim().toLowerCase().startsWith("positive");
+}
+
 function field(row: CaseDetail, key: string): string {
   const v = row.fields?.[key];
   return v == null ? "" : String(v);
@@ -379,23 +383,25 @@ export function AiCameraRecordDrawer({
   async function onSubmitCloseOut(event: FormEvent) {
     event.preventDefault();
     if (!row || busy) return;
-    if (
-      !closeout.hseo_name_badge.trim() ||
-      !closeout.close_out_action.trim() ||
-      !closeOutFile
-    ) {
+    const positive = isPositiveObservation(row);
+    if (!closeout.hseo_name_badge.trim()) {
+      setError("Safety Officer name and badge number are required.");
+      return;
+    }
+    if (!positive && (!closeout.close_out_action.trim() || !closeOutFile)) {
       setError("All close-out fields are required.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const uploaded = await uploadImage(closeOutFile);
+      const uploaded =
+        !positive && closeOutFile ? await uploadImage(closeOutFile) : null;
       setRow(
         await closeOutAiCamera(row.id, {
           hseo_name_badge: closeout.hseo_name_badge,
-          close_out_action: closeout.close_out_action,
-          close_out_picture: uploaded.url,
+          close_out_action: positive ? "" : closeout.close_out_action,
+          close_out_picture: uploaded?.url ?? null,
           safelife_reference: closeout.safelife_reference.trim() || null,
         }),
       );
@@ -608,8 +614,9 @@ export function AiCameraRecordDrawer({
                       <>
                         <h3>Submit close-out</h3>
                         <p className="muted" style={{ fontSize: 12.5, margin: "0 0 8px" }}>
-                          The close-out action, picture and Safety Officer move the record to Under
-                          Review. Reported as {actorName || "signed-in user"}.
+                          {isPositiveObservation(row)
+                            ? `Positive observation — only the Safety Officer is required. Reported as ${actorName || "signed-in user"}.`
+                            : `The close-out action, picture and Safety Officer move the record to Under Review. Reported as ${actorName || "signed-in user"}.`}
                         </p>
                         <form className="closeout-form" onSubmit={(e) => void onSubmitCloseOut(e)}>
                           <label className="fld-ctl">
@@ -625,6 +632,8 @@ export function AiCameraRecordDrawer({
                               placeholder="Type the name / badge number"
                             />
                           </label>
+                          {isPositiveObservation(row) ? null : (
+                            <>
                           <label className="fld-ctl">
                             <span className="lbl">
                               Close-out action <span className="req">*</span>
@@ -656,6 +665,8 @@ export function AiCameraRecordDrawer({
                               </span>
                             </span>
                           </label>
+                            </>
+                          )}
                           {safelifeStatusOf(row) !== "Updated" ? (
                             <label className="fld-ctl">
                               <span className="lbl">SafeLife reference number</span>

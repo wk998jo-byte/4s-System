@@ -910,6 +910,95 @@ function smoothCurvePath(
   return d;
 }
 
+/** Axis label — first name; hover keeps the stored badge - full name. */
+function opsChartFirstName(raw: string) {
+  const s = (raw || "").trim();
+  if (!s) return "Unknown";
+  const dashed = s.match(/^\d[\d\s]*[-–—]\s*(.+)$/);
+  const fullName =
+    dashed?.[1]?.trim() ||
+    (s.includes(" - ") ? s.slice(s.indexOf(" - ") + 3).trim() : s);
+  return (fullName || s).split(/\s+/)[0] || s;
+}
+
+function OpsChart({ entries }: { entries: [string, number][] }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [tip, setTip] = useState<ChartTipData | null>(null);
+  const max = niceAxisMax(Math.max(1, ...entries.map((e) => e[1])));
+  const reveal = useChartReveal(
+    hostRef,
+    entries.map(([k, v]) => `${k}:${v}`).join("|"),
+  );
+  const W = 360;
+  const H = 230;
+  const pad = { t: 14, r: 10, b: 48, l: 36 };
+  const iw = W - pad.l - pad.r;
+  const ih = H - pad.t - pad.b;
+  if (!entries.length) return <p className="empty">No records.</p>;
+  const bw = Math.min(36, iw / entries.length - 8);
+  const ticks = 5;
+  return (
+    <div className="v1-chart-host" ref={hostRef} onMouseLeave={() => setTip(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="ai-ops-svg" aria-hidden>
+        {Array.from({ length: ticks + 1 }, (_, i) => {
+          const f = i / ticks;
+          const y = pad.t + ih * (1 - f);
+          return (
+            <g key={f}>
+              <line x1={pad.l} x2={W - pad.r} y1={y} y2={y} stroke={PAL.line} strokeWidth={1} />
+              <text x={pad.l - 6} y={y + 3} textAnchor="end" fontSize={10} fill="var(--ink-2)">
+                {fmtN(Math.round(max * f))}
+              </text>
+            </g>
+          );
+        })}
+        {entries.map(([k, v], i) => {
+          const h = (v / max) * ih * reveal;
+          const x = pad.l + i * (iw / entries.length) + 4;
+          const y = pad.t + ih - h;
+          const fill = i === 0 ? PAL.red : i < 3 ? PAL.copper : PAL.steel;
+          const name = opsChartFirstName(k);
+          return (
+            <g key={k}>
+              {v > 0 ? (
+                <rect
+                  x={x}
+                  y={y}
+                  width={bw}
+                  height={Math.max(2, h)}
+                  rx={4}
+                  fill={fill}
+                  style={{ cursor: "pointer" }}
+                  onMouseMove={(e) =>
+                    setTip(
+                      tipFromEvent(e, hostRef.current, {
+                        title: k,
+                        rows: [{ color: fill, text: fmtN(v) }],
+                      }),
+                    )
+                  }
+                  onMouseLeave={() => setTip(null)}
+                />
+              ) : null}
+              <text
+                x={x + bw / 2}
+                y={H - 8}
+                textAnchor="middle"
+                fontSize={10}
+                fill="var(--ink-2)"
+                transform={`rotate(-35 ${x + bw / 2} ${H - 8})`}
+              >
+                {name.length > 10 ? `${name.slice(0, 9)}…` : name}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <ChartTip tip={tip} />
+    </div>
+  );
+}
+
 function niceAxisMax(raw: number) {
   const n = Math.max(1, raw);
   if (n <= 5) return n;
@@ -1876,6 +1965,10 @@ export function SpeedScreen({
     () => withCounts(countsForLabels(departments, deptCounts)),
     [departments, deptCounts],
   );
+  const byOps = useMemo(
+    () => countBy(scoped, (r) => field(r, "reported_by") || "Unknown").slice(0, 14),
+    [scoped],
+  );
 
   const modelLabels = useMemo(
     () => modelList.items.map((i) => i.label),
@@ -1985,6 +2078,7 @@ export function SpeedScreen({
         "Exceedance km/h",
         "Status",
         "ITQAN",
+        "Reported by",
       ].join(","),
       ...logRows.map((r) =>
         [
@@ -2004,6 +2098,7 @@ export function SpeedScreen({
           field(r, "exceedance_kmh") || exceedanceOf(r),
           statusLabel(r.status),
           itqanLabel(r),
+          field(r, "reported_by"),
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(","),
@@ -2231,20 +2326,27 @@ export function SpeedScreen({
         </article>
       </div>
 
-      <article className="v1-card">
-        <h3>By project and department</h3>
-        <p className="sub">Each violation is assigned to a project or to a department.</p>
-        <div className="dc-loc">
-          <div>
-            <div className="dc-loc-h">Projects</div>
-            <BarsList entries={byProject} color={() => PAL.red} />
+      <div className="v1-grid g2">
+        <article className="v1-card">
+          <h3>By project and department</h3>
+          <p className="sub">Each violation is assigned to a project or to a department.</p>
+          <div className="dc-loc">
+            <div>
+              <div className="dc-loc-h">Projects</div>
+              <BarsList entries={byProject} color={() => PAL.red} />
+            </div>
+            <div>
+              <div className="dc-loc-h">Departments</div>
+              <BarsList entries={byDept} color={() => PAL.steel} />
+            </div>
           </div>
-          <div>
-            <div className="dc-loc-h">Departments</div>
-            <BarsList entries={byDept} color={() => PAL.steel} />
-          </div>
-        </div>
-      </article>
+        </article>
+        <article className="v1-card">
+          <h3>Violations per operator</h3>
+          <p className="sub">Records registered by each Operator</p>
+          <OpsChart entries={byOps} />
+        </article>
+      </div>
 
       <section className="v1-card ai-log">
         <div className="hd">
@@ -2335,6 +2437,7 @@ export function SpeedScreen({
                 <th>Exceedance</th>
                 <th>Status</th>
                 <th>ITQAN</th>
+                <th>Reported by</th>
               </tr>
             </thead>
             <tbody>
@@ -2400,12 +2503,15 @@ export function SpeedScreen({
                           {itqanLabel(r)}
                         </span>
                       </td>
+                      <td title={field(r, "reported_by") || undefined}>
+                        {field(r, "reported_by") || "—"}
+                      </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={11} className="empty">
+                  <td colSpan={12} className="empty">
                     No records match these filters.
                   </td>
                 </tr>

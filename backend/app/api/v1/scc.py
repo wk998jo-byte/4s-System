@@ -1,7 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.api.deps import get_current_user, require_admin, require_capability
 from app.schemas.auth import ConfirmDelete, RejectBody, UserOut, actor_label
@@ -33,6 +33,7 @@ from app.schemas.scc import (
     WeatherSheetIn,
     WeatherWeeklySubmitIn,
 )
+from app.services.itqan_import import build_template_xlsx
 from app.services.platform_store import platform_store
 from app.services.project_access import can_access_project, can_view_report, project_scope
 
@@ -320,6 +321,46 @@ def create_itqan(
         return as_detail(platform_store.create_itqan(payload, actor=actor_label(user)))
     except ValueError as exc:
         _http_value_error(exc)
+
+
+@router.get("/itqan-violations/import-template")
+def download_itqan_import_template(user: UserOut = Depends(get_current_user)):
+    del user
+    return Response(
+        content=build_template_xlsx(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="ITQAN_Violations_Import_Template.xlsx"'
+        },
+    )
+
+
+@router.post("/itqan-violations/import")
+async def import_itqan_violations(
+    file: UploadFile = File(...),
+    user: UserOut = Depends(require_admin),
+):
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    try:
+        result = platform_store.import_itqan_sheet(
+            content, file.filename or "", actor=actor_label(user)
+        )
+    except ValueError as exc:  # includes ItqanImportError
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    platform_store.record_audit(
+        actor_user_id=user.id,
+        actor_name=actor_label(user),
+        action="itqan_imported",
+        category="records",
+        summary=(
+            f"Imported ITQAN sheet ({result['created']} created, "
+            f"{result['status_updated']} status updates, {result['linked']} linked)"
+        ),
+        details={**{k: v for k, v in result.items() if k != "errors"}, "filename": file.filename},
+    )
+    return result
 
 
 @router.post("/itqan-violations/{case_id}/status", response_model=CaseDetail)

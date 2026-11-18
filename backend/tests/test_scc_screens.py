@@ -278,12 +278,102 @@ def test_confirm_driver_preserves_reported_by_and_credits_uploader() -> None:
     assert confirmed is not None
     assert confirmed["fields"]["reported_by"] == "50200 - Safiah Josh"
     assert confirmed["fields"]["uploaded_by"] == "50253 - Fajr AlAmer"
-    itq_id = confirmed["fields"].get("itqan_case_id")
-    assert itq_id
-    itq = store.get_case(itq_id)
+    # Confirming no longer creates an ITQAN record; the sheet import does.
+    assert not confirmed["fields"].get("itqan_case_id")
+    assert confirmed["fields"]["upload_to_itqan"] is True
+
+    today = date.today().strftime("%d/%m/%Y")
+    sheet = _itqan_html_sheet(
+        [
+            ["1", "Rajdev Yadav", "12191", "Heavy Driver", "MGS Project",
+             "Speeding Over Limit - 86", f"{today} 05:50 AM", "1", "007-02-359",
+             "Heavy Vehicle", "The driver exceeded the speed limit", "Under HR Action",
+             "REF_9000001"],
+            ["2", "Nobody Matching", "99999", "Heavy Driver", "Riyas",
+             "Using Mobile Phones & Electronic Devices", f"{today} 08:00 AM", "1",
+             "007-01-342", "Heavy Vehicle", "", "Finished", "REF_9000002"],
+            ["3", "Bad Date", "5", "", "", "Not Using Seat Belt While Driving",
+             "not-a-date", "1", "", "Light Vehicle", "", "Under Safety", "REF_9000003"],
+        ]
+    )
+    result = store.import_itqan_sheet(sheet, "tracking_violations.xls", actor="Admin Rose")
+    assert result["created"] == 2
+    assert result["linked"] == 1
+    assert len(result["errors"]) == 1
+
+    refreshed = store.get_case(created["id"])
+    assert refreshed["fields"]["itqan_ref"] == "REF_9000001"
+    # Dashcam/Speed upload label data is untouched by the import.
+    assert refreshed["fields"]["upload_to_itqan"] is True
+    itq = store.get_case(refreshed["fields"]["itqan_case_id"])
     assert itq is not None
+    assert itq["fields"]["itqan_status"] == "Under HR Action"
+    assert itq["fields"]["source_case_id"] == created["id"]
+    assert itq["fields"]["source"] == "Speed Violation"
     assert itq["fields"]["reported_by"] == "50200 - Safiah Josh"
     assert itq["fields"]["uploaded_by"] == "50253 - Fajr AlAmer"
+    assert itq["status"] == "under_process"
+
+    standalone = next(
+        r for r in store.list_cases(record_type="itqan")
+        if r["fields"].get("itqan_ref") == "REF_9000002"
+    )
+    assert standalone["status"] == "closed"
+    assert standalone["fields"]["source"] == "Dashcam Observation"
+    assert standalone["fields"]["violation_type"] == "Using Mobile Phone"
+    assert not standalone["fields"].get("source_case_id")
+
+    # Re-import: status comes from the sheet, no duplicates are created.
+    again = _itqan_html_sheet(
+        [
+            ["1", "Rajdev Yadav", "12191", "", "MGS Project",
+             "Speeding Over Limit - 86", f"{today} 05:50 AM", "1", "", "Heavy Vehicle",
+             "", "Finished", "REF_9000001"],
+        ]
+    )
+    second = store.import_itqan_sheet(again, "x.xls", actor="Admin Rose")
+    assert second["created"] == 0
+    assert second["status_updated"] == 1
+    itq = store.get_case(itq["id"])
+    assert itq["fields"]["itqan_status"] == "Finished"
+    assert itq["status"] == "closed"
+
+
+def _itqan_html_sheet(rows: list[list[str]]) -> bytes:
+    from app.services.itqan_import import TEMPLATE_HEADERS
+
+    head = "".join(f"<td>{h}</td>" for h in TEMPLATE_HEADERS)
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return (
+        "<html><head></head><body><table><tr>" + head + "</tr>" + body + "</table></body></html>"
+    ).encode()
+
+
+def test_itqan_import_template_and_xlsx_roundtrip() -> None:
+    from io import BytesIO
+
+    from app.services.itqan_import import build_template_xlsx, parse_itqan_sheet
+
+    rows = parse_itqan_sheet(build_template_xlsx(), "template.xlsx")
+    assert len(rows) == 1
+    assert rows[0]["reference"] == "REF_0000001"
+    assert rows[0]["status"] == "Under Safety"
+    assert BytesIO(build_template_xlsx()).read(2) == b"PK"
+
+
+def test_itqan_import_endpoint_admin_only() -> None:
+    client = TestClient(create_app())
+    sheet = _itqan_html_sheet([])
+    files = {"file": ("t.xls", sheet, "application/vnd.ms-excel")}
+    denied = client.post(
+        "/api/v1/itqan-violations/import", files=files, headers=auth_header(client, "operator")
+    )
+    assert denied.status_code == 403
+    template = client.get(
+        "/api/v1/itqan-violations/import-template", headers=auth_header(client, "operator")
+    )
+    assert template.status_code == 200
+    assert template.content[:2] == b"PK"
 
 
 def test_sqlite_file_survives_new_store(tmp_path) -> None:
