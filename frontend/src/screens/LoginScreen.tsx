@@ -8,8 +8,6 @@ import { errorMessage } from "../lib/errors";
 
 type Mode = "signin" | "recover-email" | "recover-reset";
 
-const WRONG_PASSWORD_BEFORE_FORGOT = 3;
-
 function passwordIssues(value: string): string[] {
   const issues: string[] = [];
   if (value.length < 10) issues.push("at least 10 characters");
@@ -30,12 +28,9 @@ export function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [recoveryEmail, setRecoveryEmail] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [wrongPasswordTries, setWrongPasswordTries] = useState(0);
   const [info, setInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  const showForgot = wrongPasswordTries >= WRONG_PASSWORD_BEFORE_FORGOT;
 
   // Keep sign-in light even if a prior session left theme-dark on <html>.
   useEffect(() => {
@@ -60,13 +55,8 @@ export function LoginScreen() {
     setInfo(null);
     try {
       await login(username, password);
-      setWrongPasswordTries(0);
     } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      if (/incorrect password/i.test(message)) {
-        setWrongPasswordTries((n) => n + 1);
-      }
+      setError(errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -105,9 +95,8 @@ export function LoginScreen() {
         email: recoveryEmail.trim(),
       });
       setInfo(
-        result.delivery === "outbox"
-          ? "Code saved to the server outbox (SMTP not configured). Check backend/data/outbox, then enter the code below."
-          : "Recovery code sent. Enter it below with your new password.",
+        result.message ||
+          "If the account details match, a recovery code will be emailed shortly.",
       );
       setMode("recover-reset");
       setRecoveryCode("");
@@ -143,7 +132,6 @@ export function LoginScreen() {
       });
       setMode("signin");
       setPassword("");
-      setWrongPasswordTries(0);
       setInfo(result.message || "Password updated. Sign in with your new password.");
       setRecoveryCode("");
       setNewPassword("");
@@ -221,10 +209,19 @@ export function LoginScreen() {
         ) : mode === "recover-email" ? (
           <>
             <p className="muted">
-              Enter the email saved on the account for <strong>{username || "this user"}</strong>.
-              If it matches, a recovery code will be sent.
+              Enter your username and the email saved on your account. If they match, a recovery
+              code will be emailed to you.
             </p>
             <form className="form" onSubmit={(event) => void onRequestRecovery(event)}>
+              <label>
+                Username
+                <input
+                  value={username}
+                  autoComplete="username"
+                  onChange={(event) => setUsername(event.target.value)}
+                  required
+                />
+              </label>
               <label>
                 Email
                 <input
@@ -318,7 +315,6 @@ export function LoginScreen() {
                   autoComplete="username"
                   onChange={(event) => {
                     setUsername(event.target.value);
-                    setWrongPasswordTries(0);
                   }}
                   required
                 />
@@ -338,20 +334,18 @@ export function LoginScreen() {
               <button className="btn primary" disabled={saving}>
                 {saving ? "Signing in…" : "Sign in"}
               </button>
-              {showForgot ? (
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => {
-                    setMode("recover-email");
-                    setError(null);
-                    setInfo(null);
-                    setRecoveryEmail("");
-                  }}
-                >
-                  Forgot password?
-                </button>
-              ) : null}
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setMode("recover-email");
+                  setError(null);
+                  setInfo(null);
+                  setRecoveryEmail("");
+                }}
+              >
+                Forgot password?
+              </button>
             </form>
           </>
         )}

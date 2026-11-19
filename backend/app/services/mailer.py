@@ -1,19 +1,27 @@
-"""Small SMTP / outbox helper for non-report emails (e.g. password recovery)."""
+"""SMTP helper for password-recovery email.
+
+Recovery codes are secrets: this module never writes message bodies to disk and
+never logs them. If SMTP is unavailable it fails instead of pretending to send.
+"""
 
 from __future__ import annotations
 
+import logging
 import smtplib
-from datetime import datetime, timezone
+import ssl
 from email.message import EmailMessage
-from pathlib import Path
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
 
-def _outbox_dir() -> Path:
-    root = Path(__file__).resolve().parents[2] / "data" / "outbox"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+
+class MailDeliveryError(RuntimeError):
+    """Email could not be delivered. The message is safe to show to users."""
+
+
+def smtp_configured() -> bool:
+    return bool((get_settings().smtp_host or "").strip())
 
 
 def send_plain_email(
@@ -22,34 +30,16 @@ def send_plain_email(
     to_name: str,
     subject: str,
     body: str,
-) -> dict:
+) -> None:
+    """Send one email over SMTP, or raise MailDeliveryError."""
     to_email = (to_email or "").strip()
     if not to_email or "@" not in to_email:
-        raise ValueError("No valid email address.")
+        raise MailDeliveryError("No valid email address.")
 
     settings = get_settings()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    safe_subject = "".join(
-        ch if ch.isalnum() or ch in "-_" else "_" for ch in subject
-    )[:80]
-    folder = _outbox_dir() / f"{stamp}_{safe_subject}"
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "message.txt").write_text(
-        f"To: {to_name} <{to_email}>\nSubject: {subject}\n\n{body}\n",
-        encoding="utf-8",
-    )
-
     smtp_host = (settings.smtp_host or "").strip()
     if not smtp_host:
-        return {
-            "mode": "outbox",
-            "to": to_email,
-            "outbox_path": str(folder),
-            "message": (
-                f"Saved under backend/data/outbox "
-                f"(set SMTP_HOST in backend/.env to email live)."
-            ),
-        }
+        raise MailDeliveryError("Email delivery is not configured.")
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -60,19 +50,15 @@ def send_plain_email(
     msg.set_content(body)
 
     port = int(settings.smtp_port or 587)
-    use_tls = bool(settings.smtp_tls)
-    with smtplib.SMTP(smtp_host, port, timeout=30) as smtp:
-        if use_tls:
-            smtp.starttls()
-        user = (settings.smtp_user or "").strip()
-        password = (settings.smtp_password or "").strip()
-        if user:
-            smtp.login(user, password)
-        smtp.send_message(msg)
-
-    return {
-        "mode": "smtp",
-        "to": to_email,
-        "outbox_path": str(folder),
-        "message": f"Sent to {to_email}",
-    }
+    try:
+        with smtplib.SMTP(smtp_host, port, timeout=30) as smtp:
+            if settings.smtp_tls:
+                smtp.starttls(context=ssl.create_default_context())
+            user = (settings.smtp_user or "").strip()
+            if user:
+                smtp.login(user, (settings.smtp_password or "").strip())
+            smtp.send_message(msg)
+    except (smtplib.SMTPException, OSError) as exc:
+        # Log only the exception type: never the message, recipient or credentials.
+        logger.error("Recovery email delivery failed (%s).", type(exc).__name__)
+        raise MailDeliveryError("Email delivery failed.") from None
