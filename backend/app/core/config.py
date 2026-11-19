@@ -62,8 +62,9 @@ class Settings(BaseSettings):
     bootstrap_admin_display_name: str = "Admin"
     bootstrap_admin_badge: str = "A-001"
 
-    # Optional SMTP for monthly report issue emails. When SMTP_HOST is empty,
-    # attachments are written to backend/data/outbox/ instead.
+    # SMTP for report emails and password recovery. When SMTP_HOST is empty,
+    # report attachments are written to backend/data/outbox/ instead; password
+    # recovery never uses the outbox and fails (503) because codes are secrets.
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""

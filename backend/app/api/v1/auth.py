@@ -16,6 +16,7 @@ from app.schemas.auth import (
     format_user_label,
 )
 from app.services.auth import PERMISSION_MATRIX
+from app.services.mailer import MailDeliveryError
 from app.services.platform_store import platform_store
 from app.services.rate_limit import auth_limiter, client_key
 
@@ -46,6 +47,10 @@ def password_recovery_request(
         return platform_store.request_password_recovery(
             payload.username, payload.email
         )
+    except MailDeliveryError as exc:
+        # Only raised when email delivery is not configured at all (same for
+        # every account), so it does not reveal whether an account exists.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

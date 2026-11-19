@@ -680,7 +680,7 @@ export const requestPasswordRecovery = (body: {
   username: string;
   email: string;
 }) =>
-  request<{ ok: boolean; message: string; delivery?: string }>(
+  request<{ ok: boolean; message: string }>(
     "/api/v1/auth/password-recovery/request",
     { method: "POST", body: JSON.stringify(body) },
   );

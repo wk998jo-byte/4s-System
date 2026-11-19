@@ -65,6 +65,13 @@ except ZoneInfoNotFoundError:
     AST = timezone(timedelta(hours=3))
 ITQAN_CLOSE_OUT = "The Violation has been uploaded in ITQAN"
 ITQAN_STATUS_DEFAULT = "Under Announcement"
+RECOVERY_CODE_TTL_MINUTES = 15
+RECOVERY_MAX_ATTEMPTS = 5
+RECOVERY_RESEND_SECONDS = 60
+RECOVERY_REQUEST_MESSAGE = (
+    "If the account details match, a recovery code will be emailed shortly."
+)
+RECOVERY_RESET_ERROR = "Invalid or expired recovery code. Request a new code."
 ITQAN_SOURCE_LABELS = {
     "dashcam": "Dashcam Observation",
     "speed": "Speed Violation",
@@ -598,14 +605,48 @@ class PlatformStore:
     def _hash_recovery_code(code: str) -> str:
         return hashlib.sha256(code.strip().encode("utf-8")).hexdigest()
 
-    def request_password_recovery(self, username: str, email: str) -> dict:
-        """Email a one-time code when username + email match. Else raise."""
-        from app.services.mailer import send_plain_email
+    def _save_recovery_state(self, session, state, payload: dict) -> None:
+        if state:
+            state.value = payload
+            flag_modified(state, "value")
+        else:
+            session.add(AppStateRow(key="password_recovery", value=payload))
+        session.commit()
 
+    def _clear_recovery_code(self, uname: str) -> None:
+        with self._lock, self._sessions() as session:
+            state = session.get(AppStateRow, "password_recovery")
+            if not state or not isinstance(state.value, dict):
+                return
+            payload = dict(state.value)
+            if payload.pop(uname, None) is None:
+                return
+            self._save_recovery_state(session, state, payload)
+
+    def request_password_recovery(self, username: str, email: str) -> dict:
+        """Email a one-time code when username + email match.
+
+        The reply is identical for unknown accounts, mismatched emails, resend
+        cooldowns and delivery failures, so it never reveals whether an account
+        exists. The only distinct failure is global: SMTP not configured.
+        """
+        from app.services.mailer import (
+            MailDeliveryError,
+            send_plain_email,
+            smtp_configured,
+        )
+
+        if not smtp_configured():
+            # Nothing is stored and nothing is written to disk.
+            raise MailDeliveryError(
+                "Password recovery email is not available. Contact an administrator."
+            )
+        neutral = {"ok": True, "message": RECOVERY_REQUEST_MESSAGE}
         uname = (username or "").strip().lower()
         email_in = (email or "").strip().lower()
         if not uname or not email_in or "@" not in email_in:
-            raise ValueError("Email doesn't match.")
+            return neutral
+        now = datetime.now(timezone.utc)
         with self._lock, self._sessions() as session:
             row = (
                 session.query(UserRow)
@@ -621,39 +662,48 @@ class PlatformStore:
                 or not stored_email
                 or stored_email != email_in
             ):
-                raise ValueError("Email doesn't match.")
-            code = f"{secrets.randbelow(1_000_000):06d}"
-            expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+                return neutral
             state = session.get(AppStateRow, "password_recovery")
             payload = dict(state.value) if state and isinstance(state.value, dict) else {}
+            prior = payload.get(uname)
+            if isinstance(prior, dict):
+                try:
+                    requested = datetime.fromisoformat(str(prior.get("requested_at")))
+                    if requested.tzinfo is None:
+                        requested = requested.replace(tzinfo=timezone.utc)
+                    # Re-requesting must not be a way to reset the attempt counter.
+                    if (now - requested).total_seconds() < RECOVERY_RESEND_SECONDS:
+                        return neutral
+                except (TypeError, ValueError):
+                    pass
+            code = f"{secrets.randbelow(1_000_000):06d}"
             payload[uname] = {
                 "email": stored_email,
                 "code_hash": self._hash_recovery_code(code),
-                "expires_at": expires.isoformat(),
+                "expires_at": (
+                    now + timedelta(minutes=RECOVERY_CODE_TTL_MINUTES)
+                ).isoformat(),
+                "requested_at": now.isoformat(),
                 "attempts": 0,
             }
-            if state:
-                state.value = payload
-                flag_modified(state, "value")
-            else:
-                session.add(AppStateRow(key="password_recovery", value=payload))
-            session.commit()
+            self._save_recovery_state(session, state, payload)
             display = row.display_name
-        delivery = send_plain_email(
-            to_email=stored_email,
-            to_name=display,
-            subject="SCC Platform password recovery code",
-            body=(
-                f"Hello {display},\n\n"
-                f"Your password recovery code is: {code}\n\n"
-                "It expires in 15 minutes. If you did not request this, ignore this email.\n"
-            ),
-        )
-        return {
-            "ok": True,
-            "message": "If the email matches, a recovery code has been sent.",
-            "delivery": delivery.get("mode"),
-        }
+        try:
+            send_plain_email(
+                to_email=stored_email,
+                to_name=display,
+                subject="SCC Platform password recovery code",
+                body=(
+                    f"Hello {display},\n\n"
+                    f"Your password recovery code is: {code}\n\n"
+                    f"It expires in {RECOVERY_CODE_TTL_MINUTES} minutes and can be used once. "
+                    "If you did not request this, ignore this email.\n"
+                ),
+            )
+        except MailDeliveryError:
+            # Undeliverable code: discard it. Same reply, so nothing is disclosed.
+            self._clear_recovery_code(uname)
+        return neutral
 
     def reset_password_with_recovery_code(
         self, username: str, email: str, code: str, new_password: str
@@ -663,68 +713,58 @@ class PlatformStore:
         email_in = (email or "").strip().lower()
         code_in = (code or "").strip()
         if not uname or not email_in or not code_in:
-            raise ValueError("Enter username, email, and recovery code.")
+            raise ValueError(RECOVERY_RESET_ERROR)
         with self._lock, self._sessions() as session:
             row = (
                 session.query(UserRow)
                 .filter(UserRow.username == uname)
                 .one_or_none()
             )
-            stored_email = (
-                str(getattr(row, "email", None) or "").strip().lower() if row else ""
-            )
-            if (
-                not row
-                or not row.is_active
-                or not stored_email
-                or stored_email != email_in
-            ):
-                raise ValueError("Email doesn't match.")
             state = session.get(AppStateRow, "password_recovery")
             payload = dict(state.value) if state and isinstance(state.value, dict) else {}
-            entry = payload.get(uname)
+            entry = payload.get(uname) if row is not None and row.is_active else None
+            # Unknown user, no pending code, expired, locked out and wrong code all
+            # end in the same message so the reply never reveals which case it was.
             if not isinstance(entry, dict):
-                raise ValueError("No recovery code found. Request a new code.")
+                raise ValueError(RECOVERY_RESET_ERROR)
             attempts = int(entry.get("attempts") or 0)
-            if attempts >= 5:
+            if attempts >= RECOVERY_MAX_ATTEMPTS:
                 payload.pop(uname, None)
-                if state:
-                    state.value = payload
-                    flag_modified(state, "value")
-                    session.commit()
-                raise ValueError("Too many invalid code attempts. Request a new code.")
-            expires_raw = str(entry.get("expires_at") or "")
+                self._save_recovery_state(session, state, payload)
+                raise ValueError(RECOVERY_RESET_ERROR)
             try:
-                expires_at = datetime.fromisoformat(expires_raw)
+                expires_at = datetime.fromisoformat(str(entry.get("expires_at") or ""))
             except ValueError:
                 expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > expires_at:
                 payload.pop(uname, None)
-                if state:
-                    state.value = payload
-                    flag_modified(state, "value")
-                    session.commit()
-                raise ValueError("Recovery code expired. Request a new code.")
-            expected = str(entry.get("code_hash") or "")
-            if not secrets.compare_digest(
-                expected, self._hash_recovery_code(code_in)
-            ):
+                self._save_recovery_state(session, state, payload)
+                raise ValueError(RECOVERY_RESET_ERROR)
+            stored_email = str(getattr(row, "email", None) or "").strip().lower()
+            code_ok = secrets.compare_digest(
+                str(entry.get("code_hash") or "").encode(),
+                self._hash_recovery_code(code_in).encode(),
+            )
+            email_ok = bool(stored_email) and all(
+                secrets.compare_digest(candidate.encode(), email_in.encode())
+                for candidate in (stored_email, str(entry.get("email") or ""))
+            )
+            if not (code_ok and email_ok):
                 entry["attempts"] = attempts + 1
                 payload[uname] = entry
-                if state:
-                    state.value = payload
-                    flag_modified(state, "value")
-                    session.commit()
-                raise ValueError("Invalid recovery code.")
+                self._save_recovery_state(session, state, payload)
+                raise ValueError(RECOVERY_RESET_ERROR)
             row.password_hash = hash_password(new_password)
             row.must_change_password = False
+            # One-time code: consume it, and sign the account out everywhere
+            # (API and media tokens) so a stolen session cannot outlive the reset.
             payload.pop(uname, None)
-            if state:
-                state.value = payload
-                flag_modified(state, "value")
-            session.commit()
+            session.query(SessionRow).filter(SessionRow.user_id == row.id).delete(
+                synchronize_session=False
+            )
+            self._save_recovery_state(session, state, payload)
             session.refresh(row)
             return self._user_out(row)
 
