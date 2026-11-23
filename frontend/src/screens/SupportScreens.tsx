@@ -58,6 +58,7 @@ import {
   TYPE_LABEL,
   useList,
   useSignedInName,
+  weekFromIsoDate,
 } from "./shared";
 
 const CONTACT_CATEGORIES = Object.keys(CONTACT_LABEL);
@@ -530,6 +531,70 @@ type RecordEditDraft = {
   rental_driver: boolean;
 };
 
+/** Match registration forms: show stored ISO times in datetime-local (Asia/Riyadh). */
+function isoToDatetimeLocal(iso: string): string {
+  const trimmed = (iso || "").trim();
+  if (!trimmed) return "";
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/.exec(trimmed);
+    return match ? match[1] : "";
+  }
+  const ast = new Date(parsed.toLocaleString("en-US", { timeZone: "Asia/Riyadh" }));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${ast.getFullYear()}-${pad(ast.getMonth() + 1)}-${pad(ast.getDate())}T${pad(ast.getHours())}:${pad(ast.getMinutes())}`;
+}
+
+function datetimeLocalToIso(local: string): string {
+  const trimmed = (local || "").trim();
+  if (!trimmed) return "";
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return trimmed;
+  return parsed.toISOString();
+}
+
+function LabelSelect({
+  label,
+  listType,
+  value,
+  onChange,
+  note,
+}: {
+  label: string;
+  listType: string;
+  value: string;
+  onChange: (label: string) => void;
+  note?: string;
+}) {
+  const { items, loaded } = useList(listType);
+  const options = useMemo(() => {
+    if (value && !items.some((item) => item.label === value)) {
+      return [
+        ...items,
+        { id: `current-${value}`, label: value, is_active: true, sort_order: -1 },
+      ];
+    }
+    return items;
+  }, [items, value]);
+  return (
+    <label>
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">
+          {loaded && options.length === 0 ? "No values supplied yet" : "Select…"}
+        </option>
+        {options.map((item) => (
+          <option key={item.id} value={item.label}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      {note ? <span className="field-note">{note}</span> : null}
+    </label>
+  );
+}
+
 function buildEditDraft(detail: CaseDetail): RecordEditDraft {
   const f = detail.fields ?? {};
   const assignTo: "project" | "department" =
@@ -561,17 +626,14 @@ function buildEditDraft(detail: CaseDetail): RecordEditDraft {
               "vehicle_speed_kmh",
               "iqama_number",
             ]
-          : [
-              "worker_name_badge",
-              "location",
-              "source",
-              "sos_created_at",
-              "seen_at",
-              "close_out_report",
-            ];
+          : ["worker_name_badge", "location", "source", "sos_created_at", "seen_at"];
   const fields: Record<string, string> = {};
   for (const key of fieldKeys) {
-    fields[key] = strField(f, key);
+    const raw = strField(f, key);
+    fields[key] =
+      detail.record_type === "sos" && (key === "sos_created_at" || key === "seen_at")
+        ? isoToDatetimeLocal(raw)
+        : raw;
   }
   if (!fields.alert_summary && detail.title) {
     fields.alert_summary = detail.title;
@@ -630,21 +692,25 @@ export function RecordReviewDetail({
       if (detail.record_type === "dashcam" || detail.record_type === "speed") {
         fields.rental_driver = draft.rental_driver;
       }
+      const sosDate = String(draft.fields.sos_created_at || "").slice(0, 10);
+      if (detail.record_type === "sos") {
+        fields.sos_created_at = datetimeLocalToIso(String(fields.sos_created_at || ""));
+        fields.seen_at = datetimeLocalToIso(String(fields.seen_at || ""));
+      }
       const body: Parameters<typeof updateCase>[1] = {
         fields,
-        occurred_on: draft.occurred_on || null,
+        occurred_on:
+          detail.record_type === "sos"
+            ? sosDate || draft.occurred_on || null
+            : draft.occurred_on || null,
         title: draft.title.trim() || draft.fields.alert_summary?.trim() || detail.title,
       };
+      // Keep assignment scoped to the saved record (operators cannot reassign project).
       if (detail.record_type === "dashcam" || detail.record_type === "speed") {
-        if (draft.assignTo === "project") {
-          body.project = draft.project.trim() || null;
-          body.department = null;
-        } else {
-          body.department = draft.department.trim() || null;
-          body.project = null;
-        }
+        body.project = detail.project ?? null;
+        body.department = detail.department ?? null;
       } else {
-        body.project = draft.project.trim() || null;
+        body.project = detail.project ?? null;
       }
       if (detail.record_type === "ai_camera" || detail.record_type === "dashcam") {
         body.risk_level = draft.risk_level.trim() || null;
@@ -703,6 +769,7 @@ export function RecordReviewDetail({
 
   const f = draft.fields;
   const violation = detail.record_type === "dashcam" || detail.record_type === "speed";
+  const sosWeek = weekFromIsoDate((f.sos_created_at || draft.occurred_on || "").slice(0, 10));
 
   return (
     <div className="record-detail record-edit">
@@ -713,26 +780,16 @@ export function RecordReviewDetail({
           <>
             <label>
               Assigned to
-              <select
-                value={draft.assignTo}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    assignTo: event.target.value as "project" | "department",
-                  })
-                }
-              >
+              <select value={draft.assignTo} disabled>
                 <option value="project">Project</option>
                 <option value="department">Department</option>
               </select>
+              <span className="field-note">Assignment cannot be changed while editing</span>
             </label>
             {draft.assignTo === "project" ? (
               <label>
                 Project
-                <select
-                  value={draft.project}
-                  onChange={(event) => setDraft({ ...draft, project: event.target.value })}
-                >
+                <select value={draft.project} disabled>
                   <option value="">Select project</option>
                   {projects.items.map((item) => (
                     <option key={item.id} value={item.label}>
@@ -744,10 +801,7 @@ export function RecordReviewDetail({
             ) : (
               <label>
                 Department
-                <select
-                  value={draft.department}
-                  onChange={(event) => setDraft({ ...draft, department: event.target.value })}
-                >
+                <select value={draft.department} disabled>
                   <option value="">Select department</option>
                   {departments.items.map((item) => (
                     <option key={item.id} value={item.label}>
@@ -761,10 +815,7 @@ export function RecordReviewDetail({
         ) : (
           <label>
             Project
-            <select
-              value={draft.project}
-              onChange={(event) => setDraft({ ...draft, project: event.target.value })}
-            >
+            <select value={draft.project} disabled>
               <option value="">Select project</option>
               {projects.items.map((item) => (
                 <option key={item.id} value={item.label}>
@@ -775,14 +826,16 @@ export function RecordReviewDetail({
           </label>
         )}
 
-        <label>
-          Date
-          <input
-            type="date"
-            value={draft.occurred_on}
-            onChange={(event) => setDraft({ ...draft, occurred_on: event.target.value })}
-          />
-        </label>
+        {detail.record_type !== "sos" ? (
+          <label>
+            Date
+            <input
+              type="date"
+              value={draft.occurred_on}
+              onChange={(event) => setDraft({ ...draft, occurred_on: event.target.value })}
+            />
+          </label>
+        ) : null}
 
         {detail.record_type === "ai_camera" ? (
           <>
@@ -796,28 +849,25 @@ export function RecordReviewDetail({
             <label>
               Time
               <input
-                value={f.occurred_time ?? ""}
+                type="time"
+                value={(f.occurred_time ?? "").slice(0, 5)}
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "occurred_time", event.target.value))
                 }
               />
             </label>
-            <label>
-              Alert Type
-              <input
-                value={f.alert_type ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "alert_type", event.target.value))
-                }
-              />
-            </label>
-            <label>
-              Category
-              <input
-                value={f.category ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "category", event.target.value))}
-              />
-            </label>
+            <LabelSelect
+              label="Alert Type"
+              listType="alert_type"
+              value={f.alert_type ?? ""}
+              onChange={(alert_type) => setDraft(setDraftField(draft, "alert_type", alert_type))}
+            />
+            <LabelSelect
+              label="Category"
+              listType="ai_camera_category"
+              value={f.category ?? ""}
+              onChange={(category) => setDraft(setDraftField(draft, "category", category))}
+            />
             <label>
               Risk Level
               <select
@@ -832,45 +882,41 @@ export function RecordReviewDetail({
                 ))}
               </select>
             </label>
-            <label>
-              Detection Method
-              <input
-                value={f.detection_method ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "detection_method", event.target.value))
-                }
-              />
-            </label>
+            <LabelSelect
+              label="Detection Method"
+              listType="detection_method"
+              value={f.detection_method ?? ""}
+              onChange={(detection_method) =>
+                setDraft(setDraftField(draft, "detection_method", detection_method))
+              }
+            />
           </>
         ) : null}
 
         {detail.record_type === "dashcam" ? (
           <>
-            <label>
-              Violation Type
-              <input
-                value={f.violation_type ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "violation_type", event.target.value))
-                }
-              />
-            </label>
-            <label>
-              Vehicle Type
-              <input
-                value={f.vehicle_type ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "vehicle_type", event.target.value))
-                }
-              />
-            </label>
-            <label>
-              Model
-              <input
-                value={f.model ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "model", event.target.value))}
-              />
-            </label>
+            <LabelSelect
+              label="Violation Type"
+              listType="dashcam_observation_type"
+              value={f.violation_type ?? ""}
+              onChange={(violation_type) =>
+                setDraft(setDraftField(draft, "violation_type", violation_type))
+              }
+            />
+            <LabelSelect
+              label="Vehicle Type / Asset Category"
+              listType="vehicle_type"
+              value={f.vehicle_type ?? ""}
+              onChange={(vehicle_type) =>
+                setDraft(setDraftField(draft, "vehicle_type", vehicle_type))
+              }
+            />
+            <LabelSelect
+              label="Asset Type"
+              listType="model"
+              value={f.model ?? ""}
+              onChange={(model) => setDraft(setDraftField(draft, "model", model))}
+            />
             <label>
               Asset Number
               <input
@@ -912,55 +958,71 @@ export function RecordReviewDetail({
                 ))}
               </select>
             </label>
-            <label>
-              Iqama Number
-              <input
-                value={f.iqama_number ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "iqama_number", event.target.value))
-                }
-              />
-            </label>
-            <label className="record-edit-check">
-              <input
-                type="checkbox"
-                checked={draft.rental_driver}
-                onChange={(event) =>
-                  setDraft({ ...draft, rental_driver: event.target.checked })
-                }
-              />
-              Rental driver
-            </label>
+            <div className="fld">
+              <span className="field-label lbl">Rental driver</span>
+              <div className="radio-pills" role="radiogroup" aria-label="Rental driver">
+                {([false, true] as const).map((opt) => (
+                  <label key={String(opt)} className={`radio-pill${draft.rental_driver === opt ? " is-on" : ""}`}>
+                    <input
+                      type="radio"
+                      name="edit-rental-dashcam"
+                      checked={draft.rental_driver === opt}
+                      onChange={() =>
+                        setDraft({
+                          ...draft,
+                          rental_driver: opt,
+                          fields: {
+                            ...draft.fields,
+                            driver_badge_number: opt ? "" : draft.fields.driver_badge_number,
+                            iqama_number: opt ? draft.fields.iqama_number : "",
+                          },
+                        })
+                      }
+                    />
+                    <span className="radio-dot" aria-hidden />
+                    <span>{opt ? "Yes" : "No"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {draft.rental_driver ? (
+              <label>
+                Iqama Number
+                <input
+                  value={f.iqama_number ?? ""}
+                  onChange={(event) =>
+                    setDraft(setDraftField(draft, "iqama_number", event.target.value))
+                  }
+                />
+              </label>
+            ) : null}
           </>
         ) : null}
 
         {detail.record_type === "speed" ? (
           <>
-            <label>
-              Speed Violation Type
-              <input
-                value={f.speed_violation_type ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "speed_violation_type", event.target.value))
-                }
-              />
-            </label>
-            <label>
-              Vehicle Type
-              <input
-                value={f.vehicle_type ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "vehicle_type", event.target.value))
-                }
-              />
-            </label>
-            <label>
-              Model
-              <input
-                value={f.model ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "model", event.target.value))}
-              />
-            </label>
+            <LabelSelect
+              label="Speed Violation Type"
+              listType="speed_violation_type"
+              value={f.speed_violation_type ?? ""}
+              onChange={(speed_violation_type) =>
+                setDraft(setDraftField(draft, "speed_violation_type", speed_violation_type))
+              }
+            />
+            <LabelSelect
+              label="Vehicle Type / Asset Category"
+              listType="vehicle_type"
+              value={f.vehicle_type ?? ""}
+              onChange={(vehicle_type) =>
+                setDraft(setDraftField(draft, "vehicle_type", vehicle_type))
+              }
+            />
+            <LabelSelect
+              label="Asset Type"
+              listType="model"
+              value={f.model ?? ""}
+              onChange={(model) => setDraft(setDraftField(draft, "model", model))}
+            />
             <label>
               Asset Number
               <input
@@ -1000,6 +1062,7 @@ export function RecordReviewDetail({
             <label>
               Permitted Speed (km/h)
               <input
+                type="number"
                 value={f.permitted_speed_kmh ?? ""}
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "permitted_speed_kmh", event.target.value))
@@ -1009,62 +1072,79 @@ export function RecordReviewDetail({
             <label>
               Vehicle Speed (km/h)
               <input
+                type="number"
                 value={f.vehicle_speed_kmh ?? ""}
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "vehicle_speed_kmh", event.target.value))
                 }
               />
             </label>
-            <label>
-              Iqama Number
-              <input
-                value={f.iqama_number ?? ""}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "iqama_number", event.target.value))
-                }
-              />
-            </label>
-            <label className="record-edit-check">
-              <input
-                type="checkbox"
-                checked={draft.rental_driver}
-                onChange={(event) =>
-                  setDraft({ ...draft, rental_driver: event.target.checked })
-                }
-              />
-              Rental driver
-            </label>
+            <div className="fld">
+              <span className="field-label lbl">Rental driver</span>
+              <div className="radio-pills" role="radiogroup" aria-label="Rental driver">
+                {([false, true] as const).map((opt) => (
+                  <label key={String(opt)} className={`radio-pill${draft.rental_driver === opt ? " is-on" : ""}`}>
+                    <input
+                      type="radio"
+                      name="edit-rental-speed"
+                      checked={draft.rental_driver === opt}
+                      onChange={() =>
+                        setDraft({
+                          ...draft,
+                          rental_driver: opt,
+                          fields: {
+                            ...draft.fields,
+                            driver_badge_number: opt ? "" : draft.fields.driver_badge_number,
+                            iqama_number: opt ? draft.fields.iqama_number : "",
+                          },
+                        })
+                      }
+                    />
+                    <span className="radio-dot" aria-hidden />
+                    <span>{opt ? "Yes" : "No"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {draft.rental_driver ? (
+              <label>
+                Iqama Number
+                <input
+                  value={f.iqama_number ?? ""}
+                  onChange={(event) =>
+                    setDraft(setDraftField(draft, "iqama_number", event.target.value))
+                  }
+                />
+              </label>
+            ) : null}
           </>
         ) : null}
 
         {detail.record_type === "sos" ? (
           <>
+            <LabelSelect
+              label="Source (wearable)"
+              listType="sos_source"
+              value={f.source ?? ""}
+              onChange={(source) => setDraft(setDraftField(draft, "source", source))}
+            />
             <label>
-              Worker Name & Badge
+              Worker name &amp; badge number
               <input
+                placeholder="Worker name / Badge number"
                 value={f.worker_name_badge ?? ""}
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "worker_name_badge", event.target.value))
                 }
               />
+              <span className="field-note">
+                For a rental worker, enter the Iqama number instead of the badge number
+              </span>
             </label>
             <label>
-              Location
+              SOS created at
               <input
-                value={f.location ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "location", event.target.value))}
-              />
-            </label>
-            <label>
-              Source
-              <input
-                value={f.source ?? ""}
-                onChange={(event) => setDraft(setDraftField(draft, "source", event.target.value))}
-              />
-            </label>
-            <label>
-              SOS Created At
-              <input
+                type="datetime-local"
                 value={f.sos_created_at ?? ""}
                 onChange={(event) =>
                   setDraft(setDraftField(draft, "sos_created_at", event.target.value))
@@ -1072,10 +1152,23 @@ export function RecordReviewDetail({
               />
             </label>
             <label>
-              Seen At
+              Week
+              <input readOnly value={sosWeek ?? ""} />
+              <span className="field-note">Calculated from the date</span>
+            </label>
+            <label>
+              Seen at
               <input
+                type="datetime-local"
                 value={f.seen_at ?? ""}
                 onChange={(event) => setDraft(setDraftField(draft, "seen_at", event.target.value))}
+              />
+            </label>
+            <label>
+              Location
+              <input
+                value={f.location ?? ""}
+                onChange={(event) => setDraft(setDraftField(draft, "location", event.target.value))}
               />
             </label>
           </>
@@ -1093,18 +1186,7 @@ export function RecordReviewDetail({
             }
           />
         </label>
-      ) : (
-        <label className="record-edit-wide">
-          Close-out Report
-          <textarea
-            rows={4}
-            value={f.close_out_report ?? ""}
-            onChange={(event) =>
-              setDraft(setDraftField(draft, "close_out_report", event.target.value))
-            }
-          />
-        </label>
-      )}
+      ) : null}
 
       <div className="record-edit-actions">
         <button className="btn ghost" type="button" disabled={saving} onClick={onCancel}>
