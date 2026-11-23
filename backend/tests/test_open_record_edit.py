@@ -71,11 +71,18 @@ def _login(client: TestClient, username: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _create_open_dashcam(store: PlatformStore) -> dict:
+def _project_id(store: PlatformStore, label: str) -> str:
+    for item in store.catalog.get("project"):
+        if item["label"] == label:
+            return item["id"]
+    raise AssertionError(f"Missing project label {label!r}")
+
+
+def _create_open_dashcam(store: PlatformStore, project_label: str = "Yanbu") -> dict:
     return store.create_dashcam(
         DashcamCreate(
             assign_to="project",
-            project_id=store.catalog.get("project")[0]["id"],
+            project_id=_project_id(store, project_label),
             vehicle_type_id=store.catalog.get("vehicle_type")[0]["id"],
             model_id=store.catalog.get("model")[0]["id"],
             asset_number="007-01-100",
