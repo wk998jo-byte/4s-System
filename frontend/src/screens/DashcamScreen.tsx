@@ -1884,6 +1884,15 @@ export function DashcamScreen({
 
   const byOps = countBy(scoped, (r) => field(r, "reported_by") || "Unknown").slice(0, 14);
 
+  const byDriver = useMemo(
+    () => countBy(scoped, (r) => field(r, "driver_name") || "Unknown").slice(0, 12),
+    [scoped],
+  );
+  const byAsset = useMemo(
+    () => countBy(scoped, (r) => field(r, "asset_number") || "Unknown").slice(0, 12),
+    [scoped],
+  );
+
   const curve = useMemo(() => {
     if (curveMode === "month") {
       const now = new Date();
@@ -2229,6 +2238,19 @@ export function DashcamScreen({
           <h3>Operators performance</h3>
           <p className="sub">Records registered by each Operator</p>
           <OpsChart entries={byOps} />
+        </article>
+      </div>
+
+      <div className="v1-grid g2">
+        <article className="v1-card">
+          <h3>Observations by driver</h3>
+          <p className="sub">Top drivers by number of observations</p>
+          <HBarChart entries={byDriver} color={PAL.copper} height={300} />
+        </article>
+        <article className="v1-card">
+          <h3>Observations by asset</h3>
+          <p className="sub">Top assets by number of observations</p>
+          <HBarChart entries={byAsset} color={PAL.steel} height={300} />
         </article>
       </div>
 

@@ -14,6 +14,11 @@ import { useAuth } from "../auth/AuthContext";
 import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
 import { useIntegSettings } from "../lib/integSettings";
+import {
+  canEditOpenRecord,
+  RecordEditIconButton,
+  RecordOpenEditForm,
+} from "./RecordOpenEdit";
 import { StatusPill, useSignedInName } from "./shared";
 
 const MON3 = [
@@ -109,6 +114,7 @@ export function SpeedRecordDrawer({
   const canConfirm = Boolean(user?.capabilities.confirm_driver);
   const canDelete = Boolean(user?.capabilities.delete_record);
   const [row, setRow] = useState<CaseDetail | null>(null);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightbox, setLightbox] = useState<PhotoItem | null>(null);
@@ -121,11 +127,13 @@ export function SpeedRecordDrawer({
   useEffect(() => {
     if (!caseId) {
       setRow(null);
+      setEditing(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setEditing(false);
     fetchCase(caseId)
       .then((data) => {
         if (!cancelled) setRow(data);
@@ -333,6 +341,12 @@ export function SpeedRecordDrawer({
             </div>
             <div className="drawer-hd-meta">
               {row ? <StatusPill status={row.status} /> : null}
+              {row && canEditOpenRecord(user, row.status) ? (
+                <RecordEditIconButton
+                  editing={editing}
+                  onToggle={() => setEditing((v) => !v)}
+                />
+              ) : null}
               <button type="button" className="iconbtn" aria-label="Close" onClick={onClose}>
                 <Icon name="x" size={18} />
               </button>
@@ -345,6 +359,18 @@ export function SpeedRecordDrawer({
             {!loading && row ? (
               <div className="rec-grid">
                 <div className="rec-main">
+                  {editing ? (
+                    <RecordOpenEditForm
+                      detail={row}
+                      onCancel={() => setEditing(false)}
+                      onSaved={(updated) => {
+                        setRow(updated);
+                        setEditing(false);
+                        onChanged();
+                        notifyCasesChanged();
+                      }}
+                    />
+                  ) : (
                   <section className="v1-card">
                     <h3>Details</h3>
                     <div className="kv kv-2">
@@ -368,6 +394,7 @@ export function SpeedRecordDrawer({
                       </div>
                     ) : null}
                   </section>
+                  )}
 
                   <section className="v1-card">
                     <h3>

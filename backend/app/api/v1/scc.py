@@ -56,6 +56,67 @@ def _require_project(user: UserOut, project: object) -> None:
         raise HTTPException(status_code=403, detail="This project is not authorized.")
 
 
+def _require_case_access(user: UserOut, row: dict) -> None:
+    """Authorize against the saved record project (Admin / ``["*"]`` stay global)."""
+    identity = _require_assignments(user)
+    if not platform_store.filter_cases_for_user([row], identity):
+        raise HTTPException(status_code=403, detail="This project is not authorized.")
+
+
+# Operators may edit content fields on Open records only — never workflow/ownership.
+_OPERATOR_PROTECTED_FIELD_KEYS = frozenset(
+    {
+        "status",
+        "reported_by",
+        "uploaded_by",
+        "itqan_proof",
+        "itqan_upload_proof",
+        "itqan_case_id",
+        "close_out_action",
+        "close_out_report",
+        "approved_by",
+        "approved_at",
+        "rejected_by",
+        "rejected_at",
+        "reject_reason",
+        "signature",
+        "signature_image",
+        "confirmed_at",
+        "confirmed_by",
+    }
+)
+
+
+def _norm_scope_label(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _reject_operator_protected_mutations(existing: dict, payload: CaseAdminUpdate) -> None:
+    """Block project/ownership/workflow changes from operator open-record edits."""
+    if payload.project is not None and _norm_scope_label(payload.project) != _norm_scope_label(
+        existing.get("project")
+    ):
+        raise HTTPException(
+            status_code=403, detail="Project cannot be changed on this record."
+        )
+    if payload.department is not None and _norm_scope_label(
+        payload.department
+    ) != _norm_scope_label(existing.get("department")):
+        raise HTTPException(
+            status_code=403, detail="Department cannot be changed on this record."
+        )
+    incoming = dict(payload.fields or {})
+    blocked = sorted(key for key in incoming if key in _OPERATOR_PROTECTED_FIELD_KEYS)
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="Protected workflow fields cannot be changed.",
+        )
+
+
 def _authorized_report(user: UserOut, report_id: str) -> dict:
     identity = _require_assignments(user)
     # Do not run the report compiler before checking the stored object's scope.
@@ -232,10 +293,14 @@ def list_cases(
 
 
 @router.get("/cases/{case_id}", response_model=CaseDetail)
-def get_case(case_id: str) -> CaseDetail:
+def get_case(
+    case_id: str,
+    user: UserOut = Depends(get_current_user),
+) -> CaseDetail:
     row = platform_store.get_case(case_id)
     if not row:
         raise HTTPException(status_code=404, detail="Record not found.")
+    _require_case_access(user, row)
     return as_detail(row)
 
 
@@ -243,8 +308,30 @@ def get_case(case_id: str) -> CaseDetail:
 def patch_case(
     case_id: str,
     payload: CaseAdminUpdate,
-    user: UserOut = Depends(require_admin),
+    user: UserOut = Depends(get_current_user),
 ) -> CaseDetail:
+    """Edit original record fields.
+
+    Admins may edit any status. Operators (register) may edit Open records only
+    within their project scope. Under Process / Closed cannot be edited by operators.
+    """
+    existing = platform_store.get_case(case_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Record not found.")
+    _require_case_access(user, existing)
+    is_admin = user.role == "admin"
+    can_register = bool(user.capabilities.get("register"))
+    if not is_admin and not can_register:
+        raise HTTPException(
+            status_code=403, detail="Your role cannot edit records."
+        )
+    if not is_admin and existing.get("status") != "open":
+        raise HTTPException(
+            status_code=400,
+            detail="Only Open records can be edited.",
+        )
+    if not is_admin:
+        _reject_operator_protected_mutations(existing, payload)
     try:
         row = platform_store.update_case_admin(case_id, payload)
     except ValueError as exc:
@@ -263,6 +350,7 @@ def patch_case(
             "record_type": row.get("record_type"),
             "project": row.get("project"),
             "department": row.get("department"),
+            "status": row.get("status"),
         },
     )
     return as_detail(row)

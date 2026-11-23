@@ -299,15 +299,23 @@ function matchesDevice(r: CaseSummary, device: string) {
   return true;
 }
 
+function caseField(r: CaseSummary, key: string): string {
+  const value = r.fields?.[key];
+  return value == null ? "" : String(value);
+}
+
+/** Same classification as the Speed Violations page (fields, not truncated title). */
 function isRow(r: CaseSummary) {
-  return r.record_type === "speed" && /\brow\b/i.test(`${r.title} ${r.case_id}`);
+  return (
+    r.record_type === "speed" && /row/i.test(caseField(r, "speed_violation_type"))
+  );
 }
 
 function isLv(r: CaseSummary) {
   return (
     r.record_type === "speed" &&
     !isRow(r) &&
-    /light/i.test(r.title || "")
+    /light/i.test(caseField(r, "vehicle_type") || r.title || "")
   );
 }
 
@@ -315,7 +323,7 @@ function isHv(r: CaseSummary) {
   return (
     r.record_type === "speed" &&
     !isRow(r) &&
-    /heavy/i.test(r.title || "")
+    /heavy/i.test(caseField(r, "vehicle_type") || r.title || "")
   );
 }
 
@@ -2109,7 +2117,11 @@ export function DashboardScreen({
         {
           t: "Light Vehicle Speed Violations",
           ic: "car",
-          f: (r: CaseSummary) => isLv(r) || (isPublicSpeed(r) && !isHv(r) && !/heavy/i.test(r.title || "")),
+          f: (r: CaseSummary) =>
+            isLv(r) ||
+            (isPublicSpeed(r) &&
+              !isHv(r) &&
+              !/heavy/i.test(caseField(r, "vehicle_type") || r.title || "")),
         },
         {
           t: "Heavy Vehicle Speed Violations",
@@ -2174,7 +2186,7 @@ export function DashboardScreen({
       { n: "AI Camera Observations", c: PAL.steel, f: (r: CaseSummary) => r.record_type === "ai_camera" },
       { n: "SOS Alerts (Wearables)", c: PAL.olive, f: (r: CaseSummary) => r.record_type === "sos" },
       { n: "ROW (Zone) Violations", c: PAL.amber, f: (r: CaseSummary) => isRow(r) },
-      { n: "Light Vehicle Speed Violations", c: PAL.copper, f: (r: CaseSummary) => isLv(r) || (isPublicSpeed(r) && !isHv(r)) },
+      { n: "Light Vehicle Speed Violations", c: PAL.copper, f: (r: CaseSummary) => isLv(r) || (isPublicSpeed(r) && !isHv(r) && !/heavy/i.test(caseField(r, "vehicle_type") || r.title || "")) },
       { n: "Heavy Vehicle Speed Violations", c: PAL.red, f: (r: CaseSummary) => isHv(r) },
       { n: "Dashcam Violations", c: PAL.ink2, f: (r: CaseSummary) => r.record_type === "dashcam" },
       { n: "ITQAN Violations", c: PAL.sand, f: (r: CaseSummary) => r.record_type === "itqan" },

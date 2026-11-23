@@ -22,6 +22,8 @@ import { printReportRoot } from "../lib/reportPrint";
 import { useProjectAccess } from "../lib/useProjectAccess";
 import {
   buildMonthlyWeatherMaxes,
+  msToKmh,
+  weeklyLogWindToKmh,
   type DailyStationWeather,
   type MonthlyStationWeatherMax,
   type WeeklyWeatherLog,
@@ -55,7 +57,7 @@ function dailyWeatherFromHourly(
         hour: row.hour,
         timeLabel: row.timeLabel,
         status: row.status,
-        wind: row.wind,
+        wind: msToKmh(row.wind),
         temp: row.temp,
         rh: row.rh,
         co2: row.co2,
@@ -76,7 +78,7 @@ function dailyWeatherFromHourly(
 }
 
 function asWeeklyLog(dto: WeatherWeeklyLogDto): WeeklyWeatherLog {
-  return {
+  return weeklyLogWindToKmh({
     id: dto.id,
     project: dto.project,
     week: dto.week,
@@ -95,7 +97,7 @@ function asWeeklyLog(dto: WeatherWeeklyLogDto): WeeklyWeatherLog {
     submittedAtLabel: dto.submittedAtLabel,
     remarks: dto.remarks,
     daysByStation: dto.daysByStation,
-  };
+  });
 }
 
 type ReportTab = "daily" | "weekly" | "monthly";
@@ -728,7 +730,7 @@ function WeatherLogViewer({
                     <th rowSpan={2}>Hours logged</th>
                   </tr>
                   <tr>
-                    <th className="th-wind">Highest (m/s)</th>
+                    <th className="th-wind">Highest (km/h)</th>
                     <th className="th-temp">Highest (°C)</th>
                     <th className="th-rh">Max humidity (%)</th>
                     <th className="th-co2">Highest (ppm)</th>
@@ -1157,7 +1159,7 @@ function ReportViewer({
                                 <thead>
                                   <tr>
                                     <th>Time</th>
-                                    <th className="num">Wind (m/s)</th>
+                                    <th className="num">Wind (km/h)</th>
                                     <th className="num">Temp (°C)</th>
                                     <th className="num">RH (%)</th>
                                     <th className="num">CO2 (ppm)</th>
@@ -1225,7 +1227,7 @@ function ReportViewer({
                               <tr>
                                 <th>Day</th>
                                 <th className="num">Hours logged</th>
-                                <th className="num">Max wind (m/s)</th>
+                                <th className="num">Max wind (km/h)</th>
                                 <th className="num">Max temp (°C)</th>
                                 <th className="num">Max humidity (%)</th>
                                 <th className="num">Max CO2 (ppm)</th>
@@ -1279,7 +1281,7 @@ function ReportViewer({
                               <th className="num">Max temp °C</th>
                               <th className="num">Max heat index</th>
                               <th>Category</th>
-                              <th className="num">Max wind m/s</th>
+                              <th className="num">Max wind km/h</th>
                               <th className="num">Max humidity %</th>
                               <th className="num">Max PM10</th>
                             </tr>
