@@ -550,12 +550,11 @@ function StatusDonut({ rows }: { rows: CaseSummary[] }) {
 function RiskBars({ rows }: { rows: CaseSummary[] }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<ChartTipData | null>(null);
-  const labels = ["Low", "Medium", "High", "Positive"] as const;
-  const data = labels.map((k) => {
-    if (k === "Positive") return rows.filter(isPositive).length;
-    return rows.filter((r) => riskKey(r) === k && !isPositive(r)).length;
-  });
-  const colors = [PAL.sand, PAL.amber, PAL.red, PAL.olive];
+  const labels = ["Low", "Medium", "High"] as const;
+  const data = labels.map(
+    (k) => rows.filter((r) => riskKey(r) === k && !isPositive(r)).length,
+  );
+  const colors = [PAL.sand, PAL.amber, PAL.red];
   const max = niceAxisMax(Math.max(1, ...data));
   const reveal = useChartReveal(hostRef, data.join(","));
   const ticks = 5;
@@ -600,7 +599,7 @@ function RiskBars({ rows }: { rows: CaseSummary[] }) {
           const h = (v / max) * ih * reveal;
           const x = pad.l + i * (iw / labels.length) + 8;
           const y = pad.t + ih - h;
-          const title = label === "Positive" ? "Positive" : `${label} Risk`;
+          const title = `${label} Risk`;
           return (
             <g key={label}>
               {v > 0 ? (
@@ -1977,7 +1976,7 @@ export function AiCameraScreen({
         </article>
         <article className="v1-card">
           <h3>Risk level</h3>
-          <p className="sub">Number of records by risk level and positive observations</p>
+          <p className="sub">Number of records by risk level</p>
           <RiskBars rows={scoped} />
         </article>
       </div>

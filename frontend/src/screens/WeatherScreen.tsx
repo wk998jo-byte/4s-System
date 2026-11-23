@@ -21,6 +21,9 @@ import {
   WEATHER_DAY_HOURS,
   WEATHER_PROJECTS,
   WEATHER_STATIONS,
+  kmhToMs,
+  msToKmh,
+  weeklyLogWindToKmh,
   type HourlyWeatherRow,
   type WeatherPeriodId,
   type WeatherStation,
@@ -33,7 +36,7 @@ import { useProjectAccess } from "../lib/useProjectAccess";
 import { ChartTip, tipFromEvent, type ChartTipData } from "./chartTip";
 
 function asWeeklyLog(dto: WeatherWeeklyLogDto): WeeklyWeatherLog {
-  return {
+  return weeklyLogWindToKmh({
     id: dto.id,
     project: dto.project,
     week: dto.week,
@@ -52,7 +55,7 @@ function asWeeklyLog(dto: WeatherWeeklyLogDto): WeeklyWeatherLog {
     submittedAtLabel: dto.submittedAtLabel,
     remarks: dto.remarks,
     daysByStation: dto.daysByStation,
-  };
+  });
 }
 
 function cellToHourly(cell: {
@@ -74,7 +77,7 @@ function cellToHourly(cell: {
     hour: cell.hour,
     timeLabel: cell.timeLabel,
     status: cell.status,
-    wind: cell.wind,
+    wind: msToKmh(cell.wind),
     temp: cell.temp,
     rh: cell.rh,
     co2: cell.co2,
@@ -656,7 +659,7 @@ function WeekTable({ log }: { log: WeeklyWeatherLog }) {
                 <th className="th-wind">
                   Wind speed
                   <br />
-                  (m/s)
+                  (km/h)
                 </th>
                 <th className="th-temp">
                   Temperature
@@ -999,7 +1002,7 @@ export function WeatherScreen() {
         T: d.temp,
         RH: d.rh,
         hi: d.heatIndex,
-        wind: d.wind,
+        wind: msToKmh(d.wind) ?? 0,
         pm25: d.pm25 ?? 0,
         pm10: d.pm10,
         co2: d.co2,
@@ -1034,7 +1037,7 @@ export function WeatherScreen() {
       const heatIndex = Math.max(...ok.map((h) => h.heatIndex ?? 0));
       const temp = Math.max(...ok.map((h) => h.temp ?? 0));
       const rh = Math.max(...ok.map((h) => h.rh ?? 0));
-      const wind = Math.max(...ok.map((h) => h.wind ?? 0));
+      const wind = Math.max(...ok.map((h) => msToKmh(h.wind) ?? 0));
       const pm25 = Math.max(...ok.map((h) => h.pm25 ?? 0));
       const peak = ok.reduce((best, row) =>
         (row.heatIndex ?? 0) >= (best.heatIndex ?? 0) ? row : best,
@@ -1223,7 +1226,7 @@ export function WeatherScreen() {
         if (row.status === "upcoming") return null;
         return {
           hour,
-          wind: row.wind ?? null,
+          wind: kmhToMs(row.wind),
           temp: row.temp ?? null,
           rh: row.rh ?? null,
           co2: row.co2 ?? null,
@@ -1450,7 +1453,7 @@ export function WeatherScreen() {
                         </div>
                         <div>
                           <small>Wind</small>
-                          <b>{card.wind}</b> m/s
+                          <b>{card.wind}</b> km/h
                         </div>
                         <div>
                           <small>PM2.5</small>
@@ -1714,7 +1717,7 @@ export function WeatherScreen() {
                   <thead>
                     <tr>
                       <th>Time</th>
-                      <th>Wind (m/s)</th>
+                      <th>Wind (km/h)</th>
                       <th>Temp (°C)</th>
                       <th>RH (%)</th>
                       <th>CO2</th>
@@ -1871,21 +1874,21 @@ export function WeatherScreen() {
             </div>
 
             <div className="wx-hi-ref-figs">
-              <figure className="wx-hi-fig">
+              <figure className="wx-hi-fig wx-hi-fig--categories">
+                <figcaption>Avoiding Heat Stress · danger categories, work/rest and water guidance</figcaption>
+                <div className="wx-hi-fig-frame">
+                  <img
+                    src={heatIndexCategories}
+                    alt="Avoiding Heat Stress card with heat index danger categories, work rest and water requirements"
+                  />
+                </div>
+              </figure>
+              <figure className="wx-hi-fig wx-hi-fig--chart">
                 <figcaption>Heat index chart · Air temp (°C) × Relative humidity (%)</figcaption>
                 <div className="wx-hi-fig-frame">
                   <img
                     src={heatIndexChart}
                     alt="Heat index chart by air temperature and relative humidity"
-                  />
-                </div>
-              </figure>
-              <figure className="wx-hi-fig">
-                <figcaption>Heat index danger categories · work/rest and water guidance</figcaption>
-                <div className="wx-hi-fig-frame">
-                  <img
-                    src={heatIndexCategories}
-                    alt="Heat index danger category table with work rest and water requirements"
                   />
                 </div>
               </figure>

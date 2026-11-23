@@ -2,6 +2,35 @@
 
 export const WEATHER_DAY_HOURS = [7, 8, 9, 10, 11, 12, 13, 14] as const;
 
+/** API/DB keep wind in m/s; Weather UI and reports show km/h. */
+export const MS_TO_KMH = 3.6;
+
+export function msToKmh(value: number | null | undefined): number | undefined {
+  if (value == null || Number.isNaN(Number(value))) return undefined;
+  return Math.round(Number(value) * MS_TO_KMH * 10) / 10;
+}
+
+export function kmhToMs(value: number | null | undefined): number | null {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  return Math.round((Number(value) / MS_TO_KMH) * 100) / 100;
+}
+
+/** Convert wind fields on a weekly log from API m/s into display km/h. */
+export function weeklyLogWindToKmh<T extends {
+  daysByStation: Array<{ days: Array<{ wind: number }> }>;
+}>(log: T): T {
+  return {
+    ...log,
+    daysByStation: log.daysByStation.map((station) => ({
+      ...station,
+      days: station.days.map((day) => ({
+        ...day,
+        wind: msToKmh(day.wind) ?? 0,
+      })),
+    })),
+  };
+}
+
 export type HeatCategory = {
   level: number;
   name: string;
@@ -614,7 +643,7 @@ export function buildMonthlyWeatherMaxes(
       maxTemp: Math.round(maxTemp * 10) / 10,
       maxHeatIndex: Math.round(maxHeatIndex * 10) / 10,
       category: highest,
-      maxWind: Math.round(maxWind * 10) / 10,
+      maxWind: msToKmh(maxWind) ?? 0,
       maxHumidity,
       maxPm10,
     };

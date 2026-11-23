@@ -251,21 +251,44 @@ const SPEED_LIMITS_KMH: Record<string, { publicRoad: number; row: number }> = {
   "heavy equipment": { publicRoad: 75, row: 50 },
 };
 
+/** Public-road overrides for specific asset numbers (others keep category/type rules). */
+const PUBLIC_ROAD_ASSET_SPEED_KMH: Record<string, number> = {
+  "006-01-930": 120, // Hiace Van
+  "007-07-523": 100, // Welding Truck
+  "007-06-276": 100, // Boom Truck
+  "006-02-588": 100, // Passenger Bus
+};
+
+/** Public-road overrides for entire asset types (e.g. all Coaster Buses). */
+const PUBLIC_ROAD_TYPE_SPEED_KMH: Record<string, number> = {
+  "coaster bus": 100,
+};
+
 function permittedFromCategoryAndRoad(
   assetCategory: string,
   roadKind: string,
   assetType = "",
+  assetNumber = "",
 ): string {
   const category = assetCategory.trim().toLowerCase();
   const type = assetType.trim().toLowerCase();
-  // Hiace Van is the only Light Vehicle type with an 80 km/h public-road limit.
-  if (category === "light vehicle" && type === "hiace van" && /public/i.test(roadKind)) {
-    return "80";
+  const number = assetNumber.trim();
+  const isPublic = /public/i.test(roadKind);
+  const isRow = /row/i.test(roadKind);
+
+  if (isPublic) {
+    const byAsset = PUBLIC_ROAD_ASSET_SPEED_KMH[number];
+    if (byAsset != null) return String(byAsset);
+    const byType = PUBLIC_ROAD_TYPE_SPEED_KMH[type];
+    if (byType != null) return String(byType);
+    // Hiace Van is the only Light Vehicle type with an 80 km/h public-road limit.
+    if (category === "light vehicle" && type === "hiace van") return "80";
   }
+
   const limits = SPEED_LIMITS_KMH[category];
   if (!limits) return "";
-  if (/row/i.test(roadKind)) return String(limits.row);
-  if (/public/i.test(roadKind)) return String(limits.publicRoad);
+  if (isRow) return String(limits.row);
+  if (isPublic) return String(limits.publicRoad);
   return "";
 }
 
@@ -1206,7 +1229,12 @@ function SpeedNewDrawer({
           ? "Medium"
           : "High";
   const week = weekFromIsoDate(form.occurred_on);
-  const permittedAuto = permittedFromCategoryAndRoad(vehicle, kind, assetType);
+  const permittedAuto = permittedFromCategoryAndRoad(
+    vehicle,
+    kind,
+    assetType,
+    form.asset_number,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -1605,6 +1633,7 @@ function SpeedNewDrawer({
                                     category,
                                     item.label,
                                     typeLabel,
+                                    c.asset_number,
                                   );
                                   return {
                                     ...c,
@@ -1688,7 +1717,7 @@ function SpeedNewDrawer({
                       <span className="unit">km/h</span>
                     </span>
                     <span className="hint">
-                      Filled from Asset Category, Asset Type, and Public Road / ROW limits
+                      Filled from Asset Category, Asset Type, Asset Number, and Public Road / ROW limits
                     </span>
                   </label>
                 </div>
@@ -1982,6 +2011,15 @@ export function SpeedScreen({
       : [...map.keys()].sort((a, b) => (map.get(b) || 0) - (map.get(a) || 0));
     return withCounts(countsForLabels(labels, map)).slice(0, 13);
   }, [scoped, modelLabels]);
+
+  const byDriver = useMemo(
+    () => countBy(scoped, (r) => field(r, "driver_name") || "Unknown").slice(0, 12),
+    [scoped],
+  );
+  const byAsset = useMemo(
+    () => countBy(scoped, (r) => field(r, "asset_number") || "Unknown").slice(0, 12),
+    [scoped],
+  );
 
   const curveFor = useCallback(
     (pred: (r: CaseSummary) => boolean) => {
@@ -2345,6 +2383,19 @@ export function SpeedScreen({
           <h3>Violations per operator</h3>
           <p className="sub">Records registered by each Operator</p>
           <OpsChart entries={byOps} />
+        </article>
+      </div>
+
+      <div className="v1-grid g2">
+        <article className="v1-card">
+          <h3>Violations by driver</h3>
+          <p className="sub">Top drivers by number of violations</p>
+          <HBarChart entries={byDriver} color={PAL.copper} height={300} />
+        </article>
+        <article className="v1-card">
+          <h3>Violations by asset</h3>
+          <p className="sub">Top assets by number of violations</p>
+          <HBarChart entries={byAsset} color={PAL.steel} height={300} />
         </article>
       </div>
 

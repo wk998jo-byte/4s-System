@@ -11,6 +11,11 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { SecureMediaImg } from "../components/SecureMediaImg";
 import { errorMessage } from "../lib/errors";
+import {
+  canEditOpenRecord,
+  RecordEditIconButton,
+  RecordOpenEditForm,
+} from "./RecordOpenEdit";
 import { SignedInNameField, StatusPill, useSignedInName } from "./shared";
 
 type PhotoItem = { title: string; meta: string; src: string };
@@ -161,6 +166,7 @@ export function SosRecordDrawer({
   const canCloseSos = Boolean(user?.capabilities.close_sos);
   const canDelete = Boolean(user?.capabilities.delete_record);
   const [row, setRow] = useState<CaseDetail | null>(null);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -176,6 +182,7 @@ export function SosRecordDrawer({
   useEffect(() => {
     if (!caseId) {
       setRow(null);
+      setEditing(false);
       setPictureFile(null);
       setLightbox(null);
       setClosure({
@@ -189,6 +196,7 @@ export function SosRecordDrawer({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setEditing(false);
     fetchCase(caseId)
       .then((data) => {
         if (!cancelled) setRow(data);
@@ -326,6 +334,12 @@ export function SosRecordDrawer({
               </span>
             ) : null}
             {row ? <StatusPill status={row.status} /> : null}
+            {row && canEditOpenRecord(user, row.status) ? (
+              <RecordEditIconButton
+                editing={editing}
+                onToggle={() => setEditing((v) => !v)}
+              />
+            ) : null}
             <button type="button" className="iconbtn" aria-label="Close" onClick={onClose}>
               <Icon name="x" size={18} />
             </button>
@@ -338,6 +352,18 @@ export function SosRecordDrawer({
           {!loading && row ? (
             <div className="rec-grid">
               <div className="rec-main">
+                {editing ? (
+                  <RecordOpenEditForm
+                    detail={row}
+                    onCancel={() => setEditing(false)}
+                    onSaved={(updated) => {
+                      setRow(updated);
+                      setEditing(false);
+                      onChanged();
+                      notifyCasesChanged();
+                    }}
+                  />
+                ) : (
                 <section className="v1-card">
                   <h3>Details</h3>
                   <div className="kv kv-2">
@@ -380,6 +406,7 @@ export function SosRecordDrawer({
                     </div>
                   ) : null}
                 </section>
+                )}
 
                 <section className="v1-card">
                   <h3>

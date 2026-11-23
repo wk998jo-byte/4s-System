@@ -243,8 +243,27 @@ def get_case(case_id: str) -> CaseDetail:
 def patch_case(
     case_id: str,
     payload: CaseAdminUpdate,
-    user: UserOut = Depends(require_admin),
+    user: UserOut = Depends(get_current_user),
 ) -> CaseDetail:
+    """Edit original record fields.
+
+    Admins may edit any status. Operators (register) may edit Open records only.
+    Under Process / Closed cannot be edited by operators.
+    """
+    existing = platform_store.get_case(case_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Record not found.")
+    is_admin = user.role == "admin"
+    can_register = bool(user.capabilities.get("register"))
+    if not is_admin and not can_register:
+        raise HTTPException(
+            status_code=403, detail="Your role cannot edit records."
+        )
+    if not is_admin and existing.get("status") != "open":
+        raise HTTPException(
+            status_code=400,
+            detail="Only Open records can be edited.",
+        )
     try:
         row = platform_store.update_case_admin(case_id, payload)
     except ValueError as exc:
@@ -263,6 +282,7 @@ def patch_case(
             "record_type": row.get("record_type"),
             "project": row.get("project"),
             "department": row.get("department"),
+            "status": row.get("status"),
         },
     )
     return as_detail(row)
