@@ -610,6 +610,7 @@ function buildEditDraft(detail: CaseDetail): RecordEditDraft {
             "asset_number",
             "driver_name",
             "driver_badge_number",
+            "occurred_time",
             "alert_summary",
             "iqama_number",
           ]
@@ -621,6 +622,7 @@ function buildEditDraft(detail: CaseDetail): RecordEditDraft {
               "asset_number",
               "driver_name",
               "driver_badge_number",
+              "occurred_time",
               "location_coordinates",
               "permitted_speed_kmh",
               "vehicle_speed_kmh",
@@ -837,6 +839,21 @@ export function RecordReviewDetail({
           </label>
         ) : null}
 
+        {detail.record_type === "ai_camera" ||
+        detail.record_type === "dashcam" ||
+        detail.record_type === "speed" ? (
+          <label>
+            Time
+            <input
+              type="time"
+              value={(f.occurred_time ?? "").slice(0, 5)}
+              onChange={(event) =>
+                setDraft(setDraftField(draft, "occurred_time", event.target.value))
+              }
+            />
+          </label>
+        ) : null}
+
         {detail.record_type === "ai_camera" ? (
           <>
             <label>
@@ -844,16 +861,6 @@ export function RecordReviewDetail({
               <input
                 value={f.location ?? ""}
                 onChange={(event) => setDraft(setDraftField(draft, "location", event.target.value))}
-              />
-            </label>
-            <label>
-              Time
-              <input
-                type="time"
-                value={(f.occurred_time ?? "").slice(0, 5)}
-                onChange={(event) =>
-                  setDraft(setDraftField(draft, "occurred_time", event.target.value))
-                }
               />
             </label>
             <LabelSelect
